@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.engine/
+site/
+out/
+audition_out/
+.env
+nohup.out
+engine.log

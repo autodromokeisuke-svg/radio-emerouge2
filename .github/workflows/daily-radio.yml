@@ -1,0 +1,76 @@
+name: daily-radio
+
+on:
+  schedule:
+    - cron: "30 19 * * *"   # UTC 19:30 = 日本時間 4:30
+  workflow_dispatch: {}      # 手動実行（テスト用）
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radio
+  cancel-in-progress: false
+
+jobs:
+  broadcast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v4
+
+      - name: 過去エピソード取得（gh-pages。初回は存在しないのでスキップ可）
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: siteの.gitを除去
+        run: rm -rf site/.git || true
+
+      - name: Python準備
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: 声エンジンのキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: .engine
+          key: tts-engine-v1-${{ hashFiles('scripts/start_engine.sh') }}
+
+      - name: 7z (p7zip) の存在を保証
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: 声エンジン起動
+        run: |
+          ENGINE=$(python -c "import yaml;print(yaml.safe_load(open('config.yaml'))['tts']['engine'])")
+          echo "engine=$ENGINE"
+          bash scripts/start_engine.sh "$ENGINE"
+
+      - name: 収録（ニュース→台本→音声→配信ファイル生成）
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          export SITE_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
+          python -m src.run_daily
+
+      - name: 配信（GitHub Pagesへデプロイ）
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          force_orphan: true    # 履歴を常に1コミットに保ち、リポジトリ肥大を防ぐ
+          commit_message: "broadcast ${{ github.run_id }}"
+
+      - name: keepalive（60日無操作でスケジュールが止まる問題の対策）
+        uses: gautamkrishnar/keepalive-workflow@v2

@@ -1,0 +1,62 @@
+# ============================================
+# RADIOえめるーじぇ 設定ファイル
+# 声・尺・ニュース源はぜんぶここで変えられる
+# ============================================
+
+show:
+  title: "RADIOえめるーじぇ"
+  author: "えめるーじぇ"
+  description: "エメとルジェがお届けする、通勤のお供AIニュースラジオ（自分専用）"
+  minutes: 30            # 1回の目標尺（分）。慣れたら30に上げてOK（無料エンジンなら追加コストなし）
+  episodes_keep: 14      # 配信ページに残すエピソード数（古いものから自動削除）
+
+# --------------------------------------------
+# 声エンジン切替: "aivis" / "voicevox" / "elevenlabs"
+# ここの1行を変えるだけで声優交代できる
+# --------------------------------------------
+tts:
+  engine: "aivis"
+  pause_ms: 350          # セリフ間の「間」（ミリ秒）
+
+  aivis:
+    base_url: "http://127.0.0.1:10101"
+    # 話者は「モデル名」と「スタイル名」で指定（tools/audition.py --list-speakers で一覧確認）
+    eme:  { speaker: "木角空_T2モデル", style: "Positive" }
+    ruje: { speaker: "水巻咲_T2モデル", style: "Positive" }
+    # AivisHubの追加モデル(.aivmx)を使う場合、ダウンロードURLをここに列挙
+    # （CIが起動時にエンジンへのインストールを試みる）
+    extra_model_urls:
+      - "https://api.aivis-project.com/v1/aivm-models/d0471c7d-3adc-4c99-b7b7-0e91c4d9d96f/download?model_type=AIVMX"  # 木角空_T2モデル
+      - "https://api.aivis-project.com/v1/aivm-models/55696911-05cb-4cd2-bdb9-dbc8bfe6e5c7/download?model_type=AIVMX"  # 水巻咲_T2モデル
+
+  voicevox:
+    base_url: "http://127.0.0.1:50021"
+    eme:  { speaker: "四国めたん", style: "ノーマル" }
+    ruje: { speaker: "九州そら",   style: "ノーマル" }
+
+  elevenlabs:
+    model_id: "eleven_flash_v2_5"   # 品質最優先なら "eleven_multilingual_v2"（クレジット消費2倍）
+    eme_voice_id: ""                # Voice Designで作った声のIDを貼る
+    ruje_voice_id: ""
+
+# --------------------------------------------
+# 台本生成（Claude API）
+# --------------------------------------------
+script:
+  model: "claude-sonnet-4-6"        # 節約したい時は "claude-haiku-4-5-20251001"
+  max_news: 6                       # 1回で扱うニュース本数
+  chars_per_minute: 320             # 日本語ラジオの想定読み上げ速度（文字/分）
+  glossary_reuse_avoid_days: 30     # 「今日のひとこと用語」を再利用するまでの最低間隔（日数）
+  news_reuse_avoid_days: 7          # 同じニュースを使い回すまでの最低間隔（日数）
+
+# --------------------------------------------
+# ニュース収集元（RSS）。自由に足し引きOK
+# --------------------------------------------
+news_feeds:
+  - "https://news.google.com/rss/search?q=%E7%94%9F%E6%88%90AI%20OR%20AI&hl=ja&gl=JP&ceid=JP:ja"
+  - "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml"
+  - "https://www.publickey1.jp/atom.xml"
+  - "https://techcrunch.com/category/artificial-intelligence/feed/"
+
+# タイトル/概要にこのいずれかを含む記事だけ拾う（小文字比較）
+keyword_filter: ["ai", "人工知能", "生成", "llm", "claude", "chatgpt", "gemini", "openai", "anthropic", "モデル", "エージェント", "copilot"]

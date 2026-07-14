@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(gh auth status)",
+      "PowerShell(ffmpeg -version)",
+      "PowerShell(winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements)",
+      "PowerShell(winget install --id Gyan.FFmpeg -e --source winget --accept-package-agreements --accept-source-agreements)",
+      "PowerShell(winget install --id Python.Python.3.12 -e --source winget --accept-package-agreements --accept-source-agreements)",
+      "PowerShell(gh --version)",
+      "PowerShell(python --version)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path','User'\\); gh --version)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path','User'\\); ffmpeg -version | Select-Object -First 1)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path','User'\\); python --version)",
+      "PowerShell(powershell -NoProfile -Command \"gh auth status\")",
+      "PowerShell(Get-Command gh -ErrorAction SilentlyContinue)",
+      "PowerShell(if \\(-not $?\\) { \"gh is NOT installed or not in PATH\" })",
+      "Bash(where.exe gh *)",
+      "Bash(Get-ChildItem \"C:\\\\Program Files\\\\GitHub CLI\")",
+      "Bash(powershell.exe -NoProfile -Command \"winget list --id GitHub.cli\")",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth status)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(\"/c/Users/autod/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1.2-full_build/bin/ffmpeg.exe\" -version)",
+      "Bash(\"/c/Users/autod/AppData/Local/Programs/Python/Python312/python.exe\" --version)"
+    ]
+  }
+}
