@@ -134,6 +134,13 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         except (ValueError, json.JSONDecodeError) as e:
             last_err = e
             print(f"[warn] 台本のJSON解析に失敗 (試行{attempt + 1}): {e}")
+            if isinstance(e, json.JSONDecodeError):
+                snippet = text[max(0, e.pos - 80):e.pos + 80]
+                print(f"[debug] 失敗箇所付近: ...{snippet}...")
+            debug_path = Path(__file__).resolve().parent.parent / "out" / f"last_script_error_{attempt + 1}.txt"
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(text, encoding="utf-8")
+            print(f"[debug] 生テキストを保存: {debug_path}")
             messages += [
                 {"role": "assistant", "content": text},
                 {"role": "user",
