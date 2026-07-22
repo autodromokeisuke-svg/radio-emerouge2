@@ -33,6 +33,21 @@ def _strip_alpha_reading_gloss(text: str) -> str:
     return _ALPHA_READING_GLOSS_RE.sub(r"\1", text)
 
 
+# 音声合成エンジンが繰り返し誤読する語の固定置換（プロンプト指示だけでは
+# 再発したため保険として追加）。「重め/重い」は「じゅうめ/ちょう」等に
+# 誤読されるが、この番組の文脈では常に「おも」と読ませたいので安全に置換できる
+_KNOWN_MISREADINGS = {
+    "重め": "おもめ",
+    "重い": "おもい",
+}
+
+
+def _fix_known_misreadings(text: str) -> str:
+    for wrong, right in _KNOWN_MISREADINGS.items():
+        text = text.replace(wrong, right)
+    return text
+
+
 def _normalize(seg: AudioSegment) -> AudioSegment:
     if seg.dBFS == float("-inf"):
         return seg
@@ -56,7 +71,7 @@ def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any]) -> AudioSegment:
     failed = 0
     for i, ln in enumerate(lines, 1):
         try:
-            text = _strip_alpha_reading_gloss(ln["text"])
+            text = _fix_known_misreadings(_strip_alpha_reading_gloss(ln["text"]))
             seg = engine.synth(ln["speaker"], text)
             show += _normalize(seg) + pause
         except Exception as e:  # noqa: BLE001

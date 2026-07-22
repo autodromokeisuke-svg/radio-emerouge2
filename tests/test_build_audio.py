@@ -11,7 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.id3 import ID3
 from pydub import AudioSegment
 
-from src.build_audio import ASSETS, _embed_cover_art, _strip_alpha_reading_gloss
+from src.build_audio import (
+    ASSETS,
+    _embed_cover_art,
+    _fix_known_misreadings,
+    _strip_alpha_reading_gloss,
+)
 
 
 class TestStripAlphaReadingGloss(unittest.TestCase):
@@ -36,6 +41,20 @@ class TestStripAlphaReadingGloss(unittest.TestCase):
     def test_plain_sentence_without_parentheses_is_unchanged(self) -> None:
         text = "今日はいい天気だね、ルジェ。"
         self.assertEqual(_strip_alpha_reading_gloss(text), text)
+
+
+class TestFixKnownMisreadings(unittest.TestCase):
+    def test_omoe_replaces_juu_prone_kanji(self) -> None:
+        self.assertEqual(_fix_known_misreadings("今日はちょっと重めの話題だよ"),
+                         "今日はちょっとおもめの話題だよ")
+
+    def test_omoi_replaces_juu_prone_kanji(self) -> None:
+        self.assertEqual(_fix_known_misreadings("これは重い話だね"),
+                         "これはおもい話だね")
+
+    def test_unrelated_text_is_unchanged(self) -> None:
+        text = "今日はいい天気だね、ルジェ。"
+        self.assertEqual(_fix_known_misreadings(text), text)
 
 
 class TestEmbedCoverArt(unittest.TestCase):

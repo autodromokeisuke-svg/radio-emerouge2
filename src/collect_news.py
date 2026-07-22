@@ -1,6 +1,7 @@
 """RSSフィードから直近のAIニュースを集める。
 
-- 直近26時間の記事を対象（日付が取れないフィードは先頭数件を採用）
+- 直近26時間の記事を対象（フィード全体で日付が取れない場合のみ先頭数件を採用。
+  日付付きフィード内で個別記事だけ日付が取れない場合は鮮度不明として除外する）
 - keyword_filter のいずれかをタイトル/概要に含むものだけ残す
 - タイトルの重複を除去して最大24件返す
 """
@@ -61,16 +62,15 @@ def collect(feeds: list[str], keywords: list[str]) -> list[dict[str, str]]:
             print(f"[warn] フィード取得失敗: {url} ({e})")
             continue
         source = _clean(parsed.feed.get("title", url), 60)
-        fresh, dated = [], False
-        for e in parsed.entries[:40]:
-            ep = _entry_epoch(e)
-            if ep is not None:
-                dated = True
-                if now - ep > WINDOW_SEC:
-                    continue
-            fresh.append(e)
-        if not dated:
-            fresh = parsed.entries[:PER_FEED_FALLBACK]
+        entries = parsed.entries[:40]
+        dated = any(_entry_epoch(e) is not None for e in entries)
+        if dated:
+            # 日付を持つエントリだけを対象にする。同じフィード内で日付が
+            # 取れない個別記事は鮮度を保証できないため除外する
+            fresh = [e for e in entries
+                    if (ep := _entry_epoch(e)) is not None and now - ep <= WINDOW_SEC]
+        else:
+            fresh = entries[:PER_FEED_FALLBACK]
 
         for e in fresh:
             title = _clean(e.get("title", ""), 120)

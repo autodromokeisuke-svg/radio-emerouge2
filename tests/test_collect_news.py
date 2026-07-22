@@ -1,13 +1,19 @@
-"""filter_recent() の単体テスト（標準ライブラリ unittest のみ使用）。"""
+"""filter_recent() / collect() の単体テスト（標準ライブラリ unittest のみ使用）。"""
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.collect_news import filter_recent
+from src.collect_news import collect, filter_recent
+
+
+def _epoch_struct(hours_ago: float):
+    return time.gmtime(time.time() - hours_ago * 3600)
 
 
 class TestFilterRecent(unittest.TestCase):
@@ -44,6 +50,51 @@ class TestFilterRecent(unittest.TestCase):
         ]
         result = filter_recent(items, [])
         self.assertEqual(result, items)
+
+
+class _FakeParsed:
+    def __init__(self, feed_title: str, entries: list[dict]) -> None:
+        self.feed = {"title": feed_title}
+        self.entries = entries
+
+
+class TestCollectFreshness(unittest.TestCase):
+    def test_undated_entry_in_dated_feed_is_excluded(self) -> None:
+        """同じフィード内で、他の記事に日付があるのに個別記事だけ日付が無い場合、
+        鮮度不明として除外されること（過去に発生した不具合の回帰テスト）。"""
+        entries = [
+            {"title": "新しいAIニュース", "summary": "AIの話",
+             "link": "https://example.com/1", "published_parsed": _epoch_struct(1)},
+            {"title": "日付不明のAIニュース", "summary": "AIの話",
+             "link": "https://example.com/2"},  # published_parsed/updated_parsedが無い
+        ]
+        with patch("src.collect_news.feedparser.parse",
+                  return_value=_FakeParsed("テストフィード", entries)):
+            result = collect(["https://example.com/feed"], ["ai"])
+        titles = [it["title"] for it in result]
+        self.assertIn("新しいAIニュース", titles)
+        self.assertNotIn("日付不明のAIニュース", titles)
+
+    def test_old_dated_entry_is_excluded(self) -> None:
+        entries = [
+            {"title": "古いAIニュース", "summary": "AIの話",
+             "link": "https://example.com/1", "published_parsed": _epoch_struct(48)},
+        ]
+        with patch("src.collect_news.feedparser.parse",
+                  return_value=_FakeParsed("テストフィード", entries)):
+            result = collect(["https://example.com/feed"], ["ai"])
+        self.assertEqual(result, [])
+
+    def test_feed_entirely_without_dates_uses_fallback(self) -> None:
+        entries = [
+            {"title": f"AIニュース{i}", "summary": "AIの話", "link": f"https://example.com/{i}"}
+            for i in range(10)
+        ]
+        with patch("src.collect_news.feedparser.parse",
+                  return_value=_FakeParsed("テストフィード", entries)):
+            result = collect(["https://example.com/feed"], ["ai"])
+        # PER_FEED_FALLBACK=6件までのはず
+        self.assertEqual(len(result), 6)
 
 
 if __name__ == "__main__":
