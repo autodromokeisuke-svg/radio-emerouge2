@@ -77,7 +77,7 @@ def collect(feeds: list[str], keywords: list[str]) -> list[dict[str, str]]:
             # 日付を持つエントリだけを対象にする。同じフィード内で日付が
             # 取れない個別記事は鮮度を保証できないため除外する
             fresh = [e for e in entries
-                    if (ep := _entry_epoch(e)) is not None and now - ep <= WINDOW_SEC]
+                    if (ep := _entry_epoch(e)) is not None and 0 <= now - ep <= WINDOW_SEC]
         else:
             fresh = entries[:PER_FEED_FALLBACK]
 

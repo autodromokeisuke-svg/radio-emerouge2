@@ -81,6 +81,8 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("セリフが少なすぎる")
     clean = []
     for ln in lines:
+        if not isinstance(ln, dict):
+            continue
         sp, tx = ln.get("speaker"), (ln.get("text") or "").strip()
         if sp not in ("eme", "ruje") or not tx:
             continue

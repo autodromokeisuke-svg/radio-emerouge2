@@ -109,6 +109,18 @@ class TestCollectFreshness(unittest.TestCase):
             result = collect(["https://example.com/feed"], ["ai"])
         self.assertEqual(result, [])
 
+    def test_future_dated_entry_is_excluded(self) -> None:
+        """フィード側の日時誤りやタイムゾーン不整合で未来日付になった記事が
+        素通りしないこと（Codexの指摘に基づく回帰テスト）。"""
+        entries = [
+            {"title": "未来のAIニュース", "summary": "AIの話",
+             "link": "https://example.com/1", "published_parsed": _epoch_struct(-5)},
+        ]
+        with patch("src.collect_news.feedparser.parse",
+                  return_value=_FakeParsed("テストフィード", entries)):
+            result = collect(["https://example.com/feed"], ["ai"])
+        self.assertEqual(result, [])
+
     def test_feed_entirely_without_dates_uses_fallback(self) -> None:
         entries = [
             {"title": f"AIニュース{i}", "summary": "AIの話", "link": f"https://example.com/{i}"}

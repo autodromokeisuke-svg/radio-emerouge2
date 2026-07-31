@@ -50,6 +50,22 @@ class TestValidateCoveredNewsTitles(unittest.TestCase):
         self.assertEqual(_validate(data_mixed_types)["covered_news_titles"], ["有効な見出し"])
 
 
+class TestValidateNonDictLines(unittest.TestCase):
+    """linesの要素が辞書でない場合にAttributeErrorで落ちず、
+    不正な要素だけスキップされること（Codexの指摘に基づく回帰テスト）。"""
+
+    def test_non_dict_line_elements_are_skipped_not_crashed(self) -> None:
+        valid_lines = [{"speaker": "eme" if i % 2 == 0 else "ruje", "text": f"セリフ{i}"}
+                      for i in range(8)]
+        data = {
+            "title": "テスト放送",
+            "glossary_term": "OCR",
+            "lines": ["文字列が混ざっている", None, 123] + valid_lines,
+        }
+        result = _validate(data)
+        self.assertEqual(len(result["lines"]), 8)
+
+
 class TestFormatRecentTermsBlock(unittest.TestCase):
     def test_empty_list_returns_placeholder(self) -> None:
         self.assertEqual(_format_recent_terms_block([]), "（まだ無し）")

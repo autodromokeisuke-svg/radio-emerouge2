@@ -23,13 +23,20 @@ from typing import Any
 JST = timezone(timedelta(hours=9))
 
 
+_REQUIRED_META_KEYS = ("date", "pub", "title", "description", "file", "bytes")
+
+
 def _episode_meta(site: Path) -> list[dict[str, Any]]:
     metas = []
     for j in sorted((site / "episodes").glob("radio-*.json")):
         try:
-            metas.append(json.loads(j.read_text(encoding="utf-8")))
+            meta = json.loads(j.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
+        if not isinstance(meta, dict) or not all(k in meta for k in _REQUIRED_META_KEYS):
+            print(f"[warn] エピソードメタ情報が不正なためスキップ: {j.name}")
+            continue
+        metas.append(meta)
     return sorted(metas, key=lambda m: m["date"])  # 古い→新しい
 
 

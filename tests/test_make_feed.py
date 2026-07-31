@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.make_feed import (
+    _episode_meta,
     load_recent_glossary_terms,
     record_glossary_term,
     load_recent_news_titles,
@@ -116,6 +117,27 @@ class TestNewsHistory(unittest.TestCase):
             site = Path(tmp)
             news = load_recent_news_titles(site, days=7)
             self.assertEqual(news, [])
+
+
+class TestEpisodeMetaRobustness(unittest.TestCase):
+    """必須キー（dateなど）が欠けたエピソードメタ情報でKeyErrorにならず、
+    そのファイルだけスキップされること（Codexの指摘に基づく回帰テスト）。"""
+
+    def test_meta_missing_required_key_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            episodes = site / "episodes"
+            episodes.mkdir()
+            valid = {"date": "20260707", "pub": "2026-07-07T00:00:00+09:00",
+                    "title": "t", "description": "d", "file": "radio-20260707.mp3", "bytes": 1}
+            (episodes / "radio-20260707.json").write_text(
+                json.dumps(valid, ensure_ascii=False), encoding="utf-8")
+            broken = {"pub": "2026-07-08T00:00:00+09:00",
+                     "title": "t2", "description": "d2", "file": "radio-20260708.mp3", "bytes": 1}
+            (episodes / "radio-20260708.json").write_text(
+                json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+            metas = _episode_meta(site)
+            self.assertEqual(metas, [valid])
 
 
 if __name__ == "__main__":
