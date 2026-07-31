@@ -35,7 +35,16 @@ def _entry_epoch(entry: Any) -> float | None:
     return None
 
 
+_SOURCE_SUFFIX_RE = re.compile(r"[\s　]*[-–—][\s　]*[^-–—]{1,30}$")
+
+
 def _norm_title(title: str) -> str:
+    """比較用にタイトルを正規化する。
+
+    Google Newsなどでは同一記事が末尾の「 - 情報源名」だけ違う形で
+    複数エントリになることがあるため、正規化前に末尾の情報源表記を除く。
+    """
+    title = _SOURCE_SUFFIX_RE.sub("", title)
     return re.sub(r"[\s　【】\[\]（）()「」|｜:：\-–—・、。!！?？]", "", title).lower()
 
 

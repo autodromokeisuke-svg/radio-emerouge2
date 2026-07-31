@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.collect_news import collect, filter_recent
+from src.collect_news import _norm_title, collect, filter_recent
 
 
 def _epoch_struct(hours_ago: float):
@@ -50,6 +50,30 @@ class TestFilterRecent(unittest.TestCase):
         ]
         result = filter_recent(items, [])
         self.assertEqual(result, items)
+
+    def test_same_article_different_source_suffix_is_excluded(self) -> None:
+        """同一記事がGoogle News等で情報源名だけ違う複数エントリになるケースの回帰テスト。"""
+        items = [
+            {"title": "疲弊する新卒採用の現場 「生成AIの書いた作文」を読まされる担当者 - 日経BOOKプラス",
+             "summary": "", "source": "s", "link": "https://example.com/new-link"},
+        ]
+        recent = [{"date": "20260721",
+                  "title": "疲弊する新卒採用の現場 「生成AIの書いた作文」を読まされる担当者 - 日経ビジネス電子版",
+                  "link": "https://example.com/old-link"}]
+        result = filter_recent(items, recent)
+        self.assertEqual(result, [])
+
+
+class TestNormTitle(unittest.TestCase):
+    def test_strips_trailing_source_suffix(self) -> None:
+        self.assertEqual(
+            _norm_title("同じ記事 - 日経ビジネス電子版"),
+            _norm_title("同じ記事 - 日経BOOKプラス"),
+        )
+
+    def test_does_not_over_strip_short_titles(self) -> None:
+        # ハイフンが無いタイトルはそのまま
+        self.assertNotEqual(_norm_title("全く違う記事A"), _norm_title("全く違う記事B"))
 
 
 class _FakeParsed:
