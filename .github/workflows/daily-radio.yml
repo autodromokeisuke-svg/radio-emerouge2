@@ -49,8 +49,8 @@ jobs:
           path: .engine
           key: tts-engine-v1-${{ hashFiles('scripts/start_engine.sh') }}
 
-      - name: 7z (p7zip) の存在を保証
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+      - name: 7z・ffmpegの存在を保証
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full ffmpeg
 
       - name: 声エンジン起動
         run: |
