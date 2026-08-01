@@ -56,8 +56,8 @@ def main() -> None:
 
     print("=== 4/4 配信更新 ===")
     now = datetime.now(JST)
-    covered_titles = script.get("covered_news_titles") or []
-    used_news = [n for n in news if n["title"] in covered_titles]
+    covered_indices = script.get("covered_news_indices") or []
+    used_news = [news[i - 1] for i in covered_indices if 1 <= i <= len(news)]
     if not used_news:
         used_news = news[: cfg["script"].get("max_news", 4)]
     picked = [n["title"] for n in used_news]

@@ -92,13 +92,13 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
     glossary_term = data.get("glossary_term")
     if not isinstance(glossary_term, str):
         glossary_term = ""
-    covered_news_titles = data.get("covered_news_titles")
-    if not isinstance(covered_news_titles, list):
-        covered_news_titles = []
-    covered_news_titles = [t for t in covered_news_titles if isinstance(t, str)]
+    covered_news_indices = data.get("covered_news_indices")
+    if not isinstance(covered_news_indices, list):
+        covered_news_indices = []
+    covered_news_indices = [i for i in covered_news_indices if isinstance(i, int) and not isinstance(i, bool)]
     return {"title": (data.get("title") or "RADIOえめるーじぇ").strip(),
             "glossary_term": glossary_term.strip(),
-            "covered_news_titles": covered_news_titles,
+            "covered_news_indices": covered_news_indices,
             "lines": clean}
 
 
