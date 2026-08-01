@@ -71,6 +71,3 @@ jobs:
           publish_dir: ./site
           force_orphan: true    # 履歴を常に1コミットに保ち、リポジトリ肥大を防ぐ
           commit_message: "broadcast ${{ github.run_id }}"
-
-      - name: keepalive（60日無操作でスケジュールが止まる問題の対策）
-        uses: gautamkrishnar/keepalive-workflow@v2
