@@ -22,6 +22,7 @@ SYSTEM = (
 )
 
 _WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
+_MAX_ATTEMPTS = 3
 
 
 def _today_label() -> str:
@@ -75,6 +76,22 @@ def _format_recent_news_block(recent_news: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]],
+                         news: list[dict[str, str]]) -> list[str]:
+    """「今日のひとこと用語」の妥当性を確認し、問題があれば説明文のリストを返す（例外は投げない）。"""
+    term = (data.get("glossary_term") or "").strip()
+    if not term:
+        return []
+    problems = []
+    haystack = " ".join(f"{n.get('title', '')} {n.get('summary', '')}" for n in news).lower()
+    if term.lower() not in haystack:
+        problems.append(f"「{term}」が今日のニュース候補の中に見当たりません")
+    recent_norm = {t.get("term", "").strip().lower() for t in recent_terms}
+    if term.lower() in recent_norm:
+        problems.append(f"「{term}」は直近使用済みです")
+    return problems
+
+
 def _validate(data: dict[str, Any]) -> dict[str, Any]:
     lines = data.get("lines", [])
     if not isinstance(lines, list) or len(lines) < 8:
@@ -119,7 +136,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     client = Anthropic()
     messages = [{"role": "user", "content": prompt}]
     last_err: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(_MAX_ATTEMPTS):
         resp = client.messages.create(
             model=script_cfg["model"],
             max_tokens=16000,
@@ -129,13 +146,18 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         text = "".join(b.text for b in resp.content if b.type == "text")
         try:
             data = _validate(_extract_json(text))
+            problems = _check_glossary_term(data, recent_terms or [], news)
+            if problems and attempt < _MAX_ATTEMPTS - 1:
+                raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
+            if problems:
+                print(f"[warn] 今日のひとこと用語に懸念あり(最終試行のため受容): {'; '.join(problems)}")
             total = sum(len(ln["text"]) for ln in data["lines"])
             print(f"[ok] 台本生成: {data['title']} / {len(data['lines'])}セリフ "
                   f"/ 約{total}文字 (目標{target_chars})")
             return data
         except (ValueError, json.JSONDecodeError) as e:
             last_err = e
-            print(f"[warn] 台本のJSON解析に失敗 (試行{attempt + 1}): {e}")
+            print(f"[warn] 台本の検証に失敗 (試行{attempt + 1}): {e}")
             if isinstance(e, json.JSONDecodeError):
                 snippet = text[max(0, e.pos - 80):e.pos + 80]
                 print(f"[debug] 失敗箇所付近: ...{snippet}...")
@@ -143,10 +165,10 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
             debug_path.parent.mkdir(parents=True, exist_ok=True)
             debug_path.write_text(text, encoding="utf-8")
             print(f"[debug] 生テキストを保存: {debug_path}")
+            retry_hint = (str(e) if isinstance(e, ValueError) and not isinstance(e, json.JSONDecodeError)
+                         else "出力が指定のJSON形式ではありません。指定のJSONのみを出力し直してください。")
             messages += [
                 {"role": "assistant", "content": text},
-                {"role": "user",
-                 "content": "出力が指定のJSON形式ではありません。"
-                            "指定のJSONのみを出力し直してください。"},
+                {"role": "user", "content": retry_hint},
             ]
     raise RuntimeError(f"台本生成に失敗: {last_err}")
