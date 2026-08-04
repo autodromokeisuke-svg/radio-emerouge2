@@ -50,6 +50,13 @@ script:
   news_reuse_avoid_days: 7          # 同じニュースを使い回すまでの最低間隔（日数）
 
 # --------------------------------------------
+# Google Driveへの自動保存（任意。GDRIVE_SERVICE_ACCOUNT_JSON未設定なら自動スキップ）
+# --------------------------------------------
+drive:
+  upload_enabled: true
+  folder_id: "1pVj5ewGTbeXQOBPFYAn1KQQNdVePfq19"
+
+# --------------------------------------------
 # ニュース収集元（RSS）。自由に足し引きOK
 # --------------------------------------------
 news_feeds:

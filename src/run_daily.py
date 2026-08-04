@@ -24,6 +24,7 @@ from .make_feed import (
     load_recent_news_titles,
     record_used_news,
 )
+from .upload_drive import upload_to_drive
 from .write_script import write_script
 
 JST = timezone(timedelta(hours=9))
@@ -53,6 +54,10 @@ def main() -> None:
     audio = build(script["lines"], cfg["tts"])
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)
+
+    drive_cfg = cfg.get("drive", {})
+    if drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):
+        upload_to_drive(out_mp3, drive_cfg["folder_id"])
 
     print("=== 4/4 配信更新 ===")
     now = datetime.now(JST)
