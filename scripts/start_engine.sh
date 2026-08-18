@@ -50,7 +50,7 @@ case "$ENGINE" in
 esac
 
 echo "エンジン起動待ち (port $PORT)..."
-for i in $(seq 1 120); do
+for i in $(seq 1 240); do
   if curl -sf "http://127.0.0.1:${PORT}/version" > /dev/null 2>&1; then
     echo "エンジン準備OK ($(curl -s "http://127.0.0.1:${PORT}/version"))"
     exit 0

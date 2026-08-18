@@ -47,7 +47,10 @@ jobs:
       - name: 声エンジンのキャッシュ
         uses: actions/cache@v4
         with:
-          path: .engine
+          path: |
+            .engine
+            ~/.local/share/AivisSpeech-Engine
+            ~/.cache/huggingface
           key: tts-engine-v1-${{ hashFiles('scripts/start_engine.sh') }}
 
       - name: 7z・ffmpegの存在を保証
