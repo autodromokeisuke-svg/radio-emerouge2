@@ -21,6 +21,8 @@ from .base import TTSEngine
 
 
 class VoicevoxCompatTTS(TTSEngine):
+    supports_reading_check = True
+
     def __init__(self, base_url: str, roles: dict[str, dict[str, str]],
                  extra_model_urls: list[str] | None = None) -> None:
         self.base_url = base_url.rstrip("/")
@@ -87,7 +89,8 @@ class VoicevoxCompatTTS(TTSEngine):
         return None
 
     # ---------- 合成 ----------
-    def synth(self, role: str, text: str) -> AudioSegment:
+    def query(self, role: str, text: str) -> dict:
+        """audio_query を呼び、合成用クエリJSONを返す（読み確認にも使う）。"""
         sid = self._style_ids[role]
         last_err: Exception | None = None
         for attempt in range(3):
@@ -97,13 +100,29 @@ class VoicevoxCompatTTS(TTSEngine):
                     params={"text": text, "speaker": sid}, timeout=120,
                 )
                 q.raise_for_status()
+                return q.json()
+            except requests.RequestException as e:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+        raise RuntimeError(f"audio_queryに失敗: {text[:30]}... ({last_err})")
+
+    def synth_from_query(self, role: str, query_json: dict) -> AudioSegment:
+        """取得済みのクエリJSONから synthesis を呼び、音声を返す。"""
+        sid = self._style_ids[role]
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
                 w = requests.post(
                     f"{self.base_url}/synthesis",
-                    params={"speaker": sid}, json=q.json(), timeout=300,
+                    params={"speaker": sid}, json=query_json, timeout=300,
                 )
                 w.raise_for_status()
                 return AudioSegment.from_file(io.BytesIO(w.content), format="wav")
             except requests.RequestException as e:
                 last_err = e
                 time.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"合成に失敗: {text[:30]}... ({last_err})")
+        raise RuntimeError(f"synthesisに失敗: ({last_err})")
+
+    def synth(self, role: str, text: str) -> AudioSegment:
+        query_json = self.query(role, text)
+        return self.synth_from_query(role, query_json)

@@ -13,7 +13,11 @@ from typing import Any
 from mutagen.id3 import ID3, APIC, ID3NoHeaderError
 from pydub import AudioSegment
 
+from .reading_check import extract_reading, verify_readings
 from .tts import get_engine
+
+# 読み検証ループの最大周回数（1周目: 全セリフ検証、2周目: 修正行のみ再検証）
+_MAX_READING_CHECK_PASSES = 2
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 TARGET_DBFS = -16.0
@@ -54,7 +58,52 @@ def _normalize(seg: AudioSegment) -> AudioSegment:
     return seg.apply_gain(TARGET_DBFS - seg.dBFS)
 
 
-def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any]) -> AudioSegment:
+def _run_reading_check(engine: Any, lines: list[dict[str, str]],
+                       prepared_texts: list[str], model: str) -> list[dict | None]:
+    """全セリフの読みをエンジンに問い合わせ、Claude APIで原文と照合して直す。
+
+    最大 _MAX_READING_CHECK_PASSES 周（1周目: 全セリフ検証、2周目: 修正行のみ再検証）。
+    戻り値は合成にそのまま使えるクエリJSONのリスト（seriesとlinesは同じ長さ・順序）。
+    """
+    texts = list(prepared_texts)
+    queries: list[dict | None] = [None] * len(lines)
+
+    # 1周目: 全セリフを検証
+    pairs = []
+    for i, ln in enumerate(lines):
+        q = engine.query(ln["speaker"], texts[i])
+        queries[i] = q
+        pairs.append({"index": i + 1, "text": texts[i], "reading": extract_reading(q)})
+
+    corrections = verify_readings(pairs, model)
+    if not corrections:
+        return queries
+
+    for idx, fixed_text in corrections.items():
+        pos = idx - 1
+        if 0 <= pos < len(lines):
+            texts[pos] = fixed_text
+
+    # 2周目: 修正した行だけ再検証（無限ループ防止のためここで打ち切り）
+    pairs2 = []
+    for idx in sorted(corrections.keys()):
+        pos = idx - 1
+        if not (0 <= pos < len(lines)):
+            continue
+        q = engine.query(lines[pos]["speaker"], texts[pos])
+        queries[pos] = q
+        pairs2.append({"index": idx, "text": texts[pos], "reading": extract_reading(q)})
+
+    corrections2 = verify_readings(pairs2, model) if pairs2 else {}
+    if corrections2:
+        still_wrong = ", ".join(f"{idx}行目" for idx in sorted(corrections2.keys()))
+        print(f"[warn] 読み検証: {_MAX_READING_CHECK_PASSES}周後も修正提案が残る行はそのまま採用します ({still_wrong})")
+
+    return queries
+
+
+def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
+         reading_check_model: str | None = None) -> AudioSegment:
     engine = get_engine(tts_cfg)
     engine.prepare()
 
@@ -68,11 +117,25 @@ def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any]) -> AudioSegment:
         show += jingle + pause
 
     total = len(lines)
+    prepared_texts = [_fix_known_misreadings(_strip_alpha_reading_gloss(ln["text"]))
+                      for ln in lines]
+    queries: list[dict | None] = [None] * total
+
+    if reading_check_model and getattr(engine, "supports_reading_check", False):
+        try:
+            queries = _run_reading_check(engine, lines, prepared_texts, reading_check_model)
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 読み検証フェーズに失敗。通常合成にフォールバックします: {e}")
+            queries = [None] * total
+
     failed = 0
     for i, ln in enumerate(lines, 1):
         try:
-            text = _fix_known_misreadings(_strip_alpha_reading_gloss(ln["text"]))
-            seg = engine.synth(ln["speaker"], text)
+            q = queries[i - 1]
+            if q is not None:
+                seg = engine.synth_from_query(ln["speaker"], q)
+            else:
+                seg = engine.synth(ln["speaker"], prepared_texts[i - 1])
             show += _normalize(seg) + pause
         except Exception as e:  # noqa: BLE001
             failed += 1

@@ -51,7 +51,7 @@ def main() -> None:
                           recent_terms=recent_terms, recent_news=recent_news)
 
     print("=== 3/4 収録 ===")
-    audio = build(script["lines"], cfg["tts"])
+    audio = build(script["lines"], cfg["tts"], reading_check_model=cfg["script"]["model"])
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)
 

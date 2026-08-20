@@ -13,6 +13,10 @@ from pydub import AudioSegment
 class TTSEngine(ABC):
     """全エンジン共通の抽象クラス。"""
 
+    #: 読み検証ループ（query()/synth_from_query()による事前読み確認）に対応するか。
+    #: 対応しないエンジン（ElevenLabs等）では既定のFalseのまま。
+    supports_reading_check: bool = False
+
     @abstractmethod
     def synth(self, role: str, text: str) -> AudioSegment:
         """role("eme"/"ruje")の声で text を合成して AudioSegment を返す。"""
