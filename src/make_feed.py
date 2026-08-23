@@ -20,10 +20,20 @@ from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
 
+from mutagen.mp3 import MP3
+
 JST = timezone(timedelta(hours=9))
 
 
 _REQUIRED_META_KEYS = ("date", "pub", "title", "description", "file", "bytes")
+
+
+def _read_duration_sec(mp3_path: Path) -> int | None:
+    """MP3ファイルの再生時間（秒・整数）を返す。読めない場合はNone（例外は投げない）。"""
+    try:
+        return int(round(MP3(mp3_path).info.length))
+    except Exception:
+        return None
 
 
 def _episode_meta(site: Path) -> list[dict[str, Any]]:
@@ -36,6 +46,15 @@ def _episode_meta(site: Path) -> list[dict[str, Any]]:
         if not isinstance(meta, dict) or not all(k in meta for k in _REQUIRED_META_KEYS):
             print(f"[warn] エピソードメタ情報が不正なためスキップ: {j.name}")
             continue
+        if "duration_sec" not in meta:
+            # 旧エピソード互換: JSONに無ければMP3から補完し、可能なら書き戻す
+            duration_sec = _read_duration_sec(site / "episodes" / meta["file"])
+            if duration_sec is not None:
+                meta["duration_sec"] = duration_sec
+                try:
+                    j.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+                except OSError:
+                    pass
         metas.append(meta)
     return sorted(metas, key=lambda m: m["date"])  # 古い→新しい
 
@@ -179,15 +198,19 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
     date_key = now.strftime("%Y%m%d")
     mp3_name = f"radio-{date_key}.mp3"
     shutil.copy2(mp3_src, episodes / mp3_name)
+    new_meta = {
+        "date": date_key,
+        "pub": now.isoformat(),
+        "title": title,
+        "description": description,
+        "file": mp3_name,
+        "bytes": (episodes / mp3_name).stat().st_size,
+    }
+    duration_sec = _read_duration_sec(episodes / mp3_name)
+    if duration_sec is not None:
+        new_meta["duration_sec"] = duration_sec
     (episodes / f"radio-{date_key}.json").write_text(
-        json.dumps({
-            "date": date_key,
-            "pub": now.isoformat(),
-            "title": title,
-            "description": description,
-            "file": mp3_name,
-            "bytes": (episodes / mp3_name).stat().st_size,
-        }, ensure_ascii=False, indent=1),
+        json.dumps(new_meta, ensure_ascii=False, indent=1),
         encoding="utf-8",
     )
     record_glossary_term(site, date_key, glossary_term)
@@ -224,16 +247,23 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
     e = html.escape
     image_tag = (f'    <itunes:image href="{e(base_url)}/cover.jpg"/>\n'
                  if has_cover else "")
+    last_build_date = format_datetime(datetime.now(JST))
+    pub_date_tag = ""
+    if metas:
+        latest_pub = format_datetime(datetime.fromisoformat(metas[-1]["pub"]))
+        pub_date_tag = f"    <pubDate>{latest_pub}</pubDate>\n"
     items = []
     for m in reversed(metas):  # 新しい順
         pub = format_datetime(datetime.fromisoformat(m["pub"]))
         url = f"{base_url}/episodes/{m['file']}"
+        duration_tag = (f"\n      <itunes:duration>{int(m['duration_sec'])}</itunes:duration>"
+                        if "duration_sec" in m else "")
         items.append(f"""    <item>
       <title>{e(m['title'])}</title>
       <description>{e(m['description'])}</description>
       <enclosure url="{e(url)}" length="{m['bytes']}" type="audio/mpeg"/>
       <guid isPermaLink="true">{e(url)}</guid>
-      <pubDate>{pub}</pubDate>
+      <pubDate>{pub}</pubDate>{duration_tag}
     </item>""")
     feed = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
@@ -242,7 +272,8 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
     <link>{e(base_url)}/</link>
     <language>ja</language>
     <description>{e(show['description'])}</description>
-    <itunes:author>{e(show['author'])}</itunes:author>
+    <lastBuildDate>{last_build_date}</lastBuildDate>
+{pub_date_tag}    <itunes:author>{e(show['author'])}</itunes:author>
     <itunes:block>Yes</itunes:block>
 {image_tag}{chr(10).join(items)}
   </channel>
