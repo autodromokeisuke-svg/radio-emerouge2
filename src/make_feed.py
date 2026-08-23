@@ -8,7 +8,9 @@ site/
   cover.jpg                     … 番組カバーアート（assets/cover.jpgがあれば毎回同期）
 
 古いエピソードは episodes_keep 件を超えた分から自動削除。
-<itunes:block>Yes</itunes:block> を付けて、ポッドキャスト検索に載りにくくしてある（自分専用のため）。
+
+以前は <itunes:block>Yes</itunes:block> を付けて検索避けをしていたが、
+YouTube Music が新エピソードを取り込まない原因の可能性があったため外した。
 """
 from __future__ import annotations
 
@@ -274,7 +276,6 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
     <description>{e(show['description'])}</description>
     <lastBuildDate>{last_build_date}</lastBuildDate>
 {pub_date_tag}    <itunes:author>{e(show['author'])}</itunes:author>
-    <itunes:block>Yes</itunes:block>
 {image_tag}{chr(10).join(items)}
   </channel>
 </rss>
