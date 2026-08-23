@@ -254,6 +254,26 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
     if metas:
         latest_pub = format_datetime(datetime.fromisoformat(metas[-1]["pub"]))
         pub_date_tag = f"    <pubDate>{latest_pub}</pubDate>\n"
+
+    credit = show.get("credit")
+    full_description = show["description"]
+    if credit:
+        full_description = f"{full_description}\n\n{credit}"
+
+    category = show.get("category")
+    category_tag = f'    <itunes:category text="{e(category)}"/>\n' if category else ""
+    explicit = "true" if show.get("explicit", False) else "false"
+
+    owner_email = show.get("owner_email")
+    owner_tag = ""
+    if owner_email:
+        owner_tag = (
+            "    <itunes:owner>\n"
+            f"      <itunes:name>{e(show['author'])}</itunes:name>\n"
+            f"      <itunes:email>{e(owner_email)}</itunes:email>\n"
+            "    </itunes:owner>\n"
+        )
+
     items = []
     for m in reversed(metas):  # 新しい順
         pub = format_datetime(datetime.fromisoformat(m["pub"]))
@@ -273,9 +293,12 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
     <title>{e(show['title'])}</title>
     <link>{e(base_url)}/</link>
     <language>ja</language>
-    <description>{e(show['description'])}</description>
+    <description>{e(full_description)}</description>
     <lastBuildDate>{last_build_date}</lastBuildDate>
 {pub_date_tag}    <itunes:author>{e(show['author'])}</itunes:author>
+{category_tag}    <itunes:explicit>{explicit}</itunes:explicit>
+    <itunes:type>episodic</itunes:type>
+{owner_tag}    <itunes:summary>{e(full_description)}</itunes:summary>
 {image_tag}{chr(10).join(items)}
   </channel>
 </rss>
@@ -306,6 +329,10 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
       <h3>{e(m['title'])}</h3>
       <audio controls preload="none" src="episodes/{e(m['file'])}"></audio>
     </article>""")
+
+    credit = show.get("credit")
+    credit_html = (f'  <p class="credit">{e(credit)}</p>\n' if credit else "")
+
     page = f"""<!doctype html>
 <html lang="ja">
 <meta charset="utf-8">
@@ -333,12 +360,14 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
   h3 {{ font-size:1rem; font-weight:600; margin:2px 0 8px }}
   .date {{ color:var(--sub); font-size:.8rem; letter-spacing:.12em }}
   audio {{ width:100%; margin-top:10px }}
+  .credit {{ color:var(--sub); font-size:.72rem; letter-spacing:.04em; margin-top:40px;
+            padding-top:16px; border-top:1px solid var(--line) }}
 </style>
 <body>
   {cover_tag}
   <h1><small>MORNING COMMUTE PROGRAM</small>{e(show['title'])}</h1>
 {chr(10).join(cards)}
-</body>
+{credit_html}</body>
 </html>
 """
     (site / "index.html").write_text(page, encoding="utf-8")

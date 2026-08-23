@@ -6,9 +6,13 @@
 show:
   title: "RADIOえめるーじぇ"
   author: "えめるーじぇ"
-  description: "エメとルジェがお届けする、通勤のお供AIニュースラジオ（自分専用）"
+  description: "エメとルジェが毎朝お届けする、通勤のお供AIニュースラジオ。その日のAI・テクノロジーの話題を、ふたりの掛け合いで20分ほどにまとめています。"
   minutes: 30            # 1回の目標尺（分）。慣れたら30に上げてOK（無料エンジンなら追加コストなし）
   episodes_keep: 14      # 配信ページに残すエピソード数（古いものから自動削除）
+  owner_email: "emerouge.kei@gmail.com"
+  category: "Technology"
+  explicit: false
+  credit: "音声: Tαkoe:Style-Bert-VITS2:木角空 / Tαkoe:Style-Bert-VITS2:水巻咲（音源制作: Yumehaki Project V / VSMB Project）"
 
 # --------------------------------------------
 # 声エンジン切替: "aivis" / "voicevox" / "elevenlabs"
