@@ -2,7 +2,9 @@ name: daily-radio
 
 on:
   schedule:
-    - cron: "30 19 * * *"   # UTC 19:30 = 日本時間 4:30
+    # UTC 18:07 = 日本時間 3:07。GitHub Actionsのscheduleは高負荷時に遅延するため、
+    # 混雑しやすい0分/30分を避けた半端な分にし、通勤時刻まで余裕を持たせている
+    - cron: "7 18 * * *"
   workflow_dispatch: {}      # 手動実行（テスト用）
 
 permissions:
