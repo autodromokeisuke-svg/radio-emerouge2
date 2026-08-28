@@ -26,6 +26,7 @@ from .make_feed import (
     record_used_news,
 )
 from .upload_drive import upload_to_drive
+from .upload_youtube import upload_to_youtube
 from .write_script import write_script
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,29 +86,45 @@ def main() -> None:
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)
 
-    drive_cfg = cfg.get("drive", {})
-    if drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):
-        upload_to_drive(out_mp3, drive_cfg["folder_id"])
-
-    print("=== 4/4 配信更新 ===")
     now = datetime.now(JST)
     covered_indices = script.get("covered_news_indices") or []
     used_news = [news[i - 1] for i in covered_indices if 1 <= i <= len(news)]
     if not used_news:
         used_news = news[: cfg["script"].get("max_news", 4)]
     picked = [n["title"] for n in used_news]
-    description = "今日の話題: " + " / ".join(picked) if picked else show_cfg["description"]
+    episode_title = f"{script['title']}（{now.month}/{now.day}）"
+    episode_description = ("今日の話題: " + " / ".join(picked) if picked
+                           else show_cfg["description"])[:400]
+
+    drive_cfg = cfg.get("drive", {})
+    if drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):
+        upload_to_drive(out_mp3, drive_cfg["folder_id"])
+
+    print("=== 4/4 配信更新 ===")
     update_site(
         site=ROOT / "site",
         mp3_src=out_mp3,
-        title=f"{script['title']}（{now.month}/{now.day}）",
-        description=description[:400],
+        title=episode_title,
+        description=episode_description,
         base_url=base_url,
         show_cfg=show_cfg,
         glossary_term=script.get("glossary_term", ""),
     )
     record_used_news(ROOT / "site", now.strftime("%Y%m%d"),
                      [{"title": n["title"], "link": n.get("link", "")} for n in used_news])
+
+    # YouTubeは従。動画の変換とアップロードに数分かかるため、主軸である
+    # ポッドキャスト配信(update_site)を先に終わらせてから実行する
+    youtube_cfg = cfg.get("youtube", {})
+    if youtube_cfg.get("enabled"):
+        # YouTube側の説明欄にも音声モデルのクレジット表示（利用規約で必須）とフィードURLを添える
+        yt_description = f"{episode_description}\n\n{show_cfg.get('credit', '')}\n\n{base_url}/feed.xml"
+        video_id = upload_to_youtube(out_mp3, episode_title, yt_description, cfg)
+        if video_id:
+            print(f"[ok] YouTubeアップロード完了: https://youtu.be/{video_id}")
+        else:
+            print("[skip] YouTubeアップロードはスキップ、または失敗しました（放送生成は継続）")
+
     print("=== 放送完了！いってらっしゃい ===")
 
 
