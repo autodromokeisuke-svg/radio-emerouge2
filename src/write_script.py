@@ -30,6 +30,17 @@ def _today_label() -> str:
     return f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS[now.weekday()]}曜日"
 
 
+def _tomorrow_label() -> str:
+    """次回放送日（＝翌日）の曜日を日本語表記で返す（例: 土曜日）。
+
+    この番組は毎日放送のため、次回放送は常に「実行日（＝今日の放送日）の翌日」。
+    AIに曜日計算をさせると「金曜の次は週明け」のような誤りをするため、
+    コード側で計算してプロンプトに渡す。
+    """
+    tomorrow = datetime.now(JST) + timedelta(days=1)
+    return f"{_WEEKDAYS[tomorrow.weekday()]}曜日"
+
+
 def _news_block(items: list[dict[str, str]]) -> str:
     if not items:
         return ("(今日はニュース収集に失敗。ニュースの代わりに、"
@@ -125,6 +136,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     target_chars = minutes * int(script_cfg.get("chars_per_minute", 320))
     prompt = PROMPT_PATH.read_text(encoding="utf-8").format(
         today=_today_label(),
+        tomorrow_label=_tomorrow_label(),
         minutes=minutes,
         target_chars=target_chars,
         max_news=script_cfg.get("max_news", 4),
