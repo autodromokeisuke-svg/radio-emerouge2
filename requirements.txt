@@ -2,6 +2,7 @@ anthropic>=0.40
 feedparser>=6.0.11
 google-api-python-client>=2.100
 google-auth>=2.23
+google-auth-oauthlib>=1.2
 mutagen>=1.47
 pydub>=0.25.1
 PyYAML>=6.0

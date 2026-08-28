@@ -7,3 +7,10 @@ audition_out/
 .env
 nohup.out
 engine.log
+
+# YouTube OAuth（絶対にコミットしない）
+client_secret.json
+token.json
+youtube_client_id.txt
+youtube_client_secret.txt
+youtube_refresh_token.txt
