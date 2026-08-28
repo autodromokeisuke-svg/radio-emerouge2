@@ -11,7 +11,7 @@ GitHub Actions から `python -m src.run_daily` で実行される。
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -19,6 +19,7 @@ import yaml
 from .build_audio import build, export_mp3
 from .collect_news import collect, filter_recent
 from .make_feed import (
+    JST,
     update_site,
     load_recent_glossary_terms,
     load_recent_news_titles,
@@ -27,11 +28,40 @@ from .make_feed import (
 from .upload_drive import upload_to_drive
 from .write_script import write_script
 
-JST = timezone(timedelta(hours=9))
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _today_mp3_name(site: Path) -> str | None:
+    """本日分の放送ファイルが site/episodes/ に既にあれば、そのファイル名を返す。無ければNone。
+
+    date_key の求め方は make_feed.update_site() と同一（JSTで %Y%m%d）にすること。
+    ここでは make_feed.JST をそのままインポートして使い、定義のズレを防いでいる。
+    """
+    date_key = datetime.now(JST).strftime("%Y%m%d")
+    mp3_name = f"radio-{date_key}.mp3"
+    return mp3_name if (site / "episodes" / mp3_name).exists() else None
+
+
+def _should_skip_scheduled_run(site: Path) -> bool:
+    """schedule起動（cron）で、かつ本日分が配信済みならTrueを返す。
+
+    2本のcron（1本目が遅延した場合の保険として2本目を用意）が両方成功すると
+    Claude APIを二重消費してしまうため、2本目以降は早期にスキップする。
+    workflow_dispatch（手動実行）やローカル実行（GITHUB_EVENT_NAME未設定）では
+    常にFalseを返す＝スキップしない。ケイスケが手動で今日の分を作り直したい場合があるため。
+    """
+    if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+        return False
+    return _today_mp3_name(site) is not None
+
+
 def main() -> None:
+    site = ROOT / "site"
+    if _should_skip_scheduled_run(site):
+        mp3_name = _today_mp3_name(site)
+        print(f"[ok] 本日分は配信済みのためスキップします ({mp3_name})")
+        return
+
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
     show_cfg = cfg["show"]
     base_url = os.environ.get("SITE_BASE_URL", "http://localhost:8000").rstrip("/")
