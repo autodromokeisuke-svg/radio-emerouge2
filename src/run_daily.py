@@ -79,7 +79,8 @@ def main() -> None:
     glossary_days = int(cfg["script"].get("glossary_reuse_avoid_days", 30))
     recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days)
     script = write_script(news, script_cfg, minutes=int(show_cfg["minutes"]),
-                          recent_terms=recent_terms, recent_news=recent_news)
+                          recent_terms=recent_terms, recent_news=recent_news,
+                          show_cfg=show_cfg)
 
     print("=== 3/4 収録 ===")
     audio = build(script["lines"], cfg["tts"], reading_check_model=cfg["script"]["model"])

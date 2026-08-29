@@ -24,10 +24,41 @@ SYSTEM = (
 _WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 _MAX_ATTEMPTS = 3
 
+# 一般公開初日（config.yaml の show.debut_date）だけプロンプトに差し込む、
+# 番組紹介パート向けの指示ブロック。通常日は write_script() が空文字を渡すので出力されない。
+_DEBUT_INTRO_BLOCK = """## 初回放送の案内（本日限定）
+今日はこの番組の記念すべき初回放送日。オープニング（挨拶・日付）の直後、最初のニュースに入る前に、
+エメとルジェの自然な掛け合いで次の5点を短く紹介すること（目安2〜3分程度。尺を圧迫しすぎないこと）。
+1. エメとルジェの自己紹介（名前と、ふたりの掛け合いの雰囲気が伝わるように）
+2. 番組の趣旨（毎朝、AI・テクノロジーのニュースを20分ほどで届ける番組であること）
+3. 毎朝配信していること
+4. 「今日のひとこと」など定番コーナーがあることの紹介
+5. ポッドキャスト（Apple Podcasts）とYouTubeの両方で聴けること
+今日が記念すべき初回放送であることが伝わるようにすること。
+リスナーにとって今日が初めての放送なので、「以前もお話ししましたが」「前回も少し触れましたが」
+のような、過去の放送を前提にした前置きはこのパートにも他のパートにも入れないこと。
+「自分専用で試験運用していた」といった過去の経緯には一切触れないこと。
+このパート以外のニュース本数や他のコーナー構成は通常どおり維持すること。
+"""
+
 
 def _today_label() -> str:
     now = datetime.now(JST)
     return f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS[now.weekday()]}曜日"
+
+
+def _debut_block(show_cfg: dict[str, Any] | None) -> str:
+    """今日が show_cfg['debut_date']（%Y%m%d, JST基準）と一致する日だけ指示ブロックを返す。
+
+    debut_date が未設定・空文字なら常に空文字（＝通常運用）。
+    """
+    if not show_cfg:
+        return ""
+    debut_date = str(show_cfg.get("debut_date") or "").strip()
+    if not debut_date:
+        return ""
+    today_key = datetime.now(JST).strftime("%Y%m%d")
+    return _DEBUT_INTRO_BLOCK if today_key == debut_date else ""
 
 
 def _tomorrow_label() -> str:
@@ -132,7 +163,8 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
 
 def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
                  minutes: int, recent_terms: list[dict[str, str]] | None = None,
-                 recent_news: list[dict[str, str]] | None = None) -> dict[str, Any]:
+                 recent_news: list[dict[str, str]] | None = None,
+                 show_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     target_chars = minutes * int(script_cfg.get("chars_per_minute", 320))
     prompt = PROMPT_PATH.read_text(encoding="utf-8").format(
         today=_today_label(),
@@ -144,6 +176,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         recent_terms_block=_format_recent_terms_block(recent_terms or []),
         recent_news_block=_format_recent_news_block(recent_news or []),
         news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 7),
+        debut_block=_debut_block(show_cfg),
     )
     client = Anthropic()
     messages = [{"role": "user", "content": prompt}]
