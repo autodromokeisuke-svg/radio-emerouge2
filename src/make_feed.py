@@ -307,6 +307,44 @@ def _write_feed(site: Path, metas: list[dict], base_url: str,
 
 
 # --------------------------------------------------------------
+_NEWS_PREFIX = "今日の話題: "
+_NEWS_SEP = " / "
+
+
+def _split_news_titles(description: str | None) -> list[str]:
+    """descriptionをニューストピックのタイトル一覧に変換する。
+
+    "今日の話題: A / B / C" 形式なら ["A", "B", "C"] を返す。
+    接頭辞が無い場合（ニュース収集に失敗した日のshow.descriptionなど）は
+    分割せず、description全体を1件だけのリストとして返す。
+    空文字/None/キー無しの場合は空リストを返す（例外は投げない）。
+    """
+    if not description:
+        return []
+    text = description.strip()
+    if not text:
+        return []
+    if text.startswith(_NEWS_PREFIX):
+        rest = text[len(_NEWS_PREFIX):]
+        titles = [t.strip() for t in rest.split(_NEWS_SEP) if t.strip()]
+        return titles if titles else [text]
+    return [text]
+
+
+def _news_list_html(description: str | None) -> str:
+    """ニューストピックの<ul>断片を返す。表示するものが無ければ空文字。
+
+    箇条書きの記号はCSSのlist-styleで付与し、HTMLのテキストノードには
+    タイトルだけを入れる（コピー時に記号が混ざらないようにするため）。
+    """
+    e = html.escape
+    titles = _split_news_titles(description)
+    if not titles:
+        return ""
+    items = "\n".join(f"        <li>{e(t)}</li>" for t in titles)
+    return f'      <ul class="news-list">\n{items}\n      </ul>\n'
+
+
 def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
                  has_cover: bool) -> None:
     e = html.escape
@@ -316,18 +354,20 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
     cards = []
     if latest:
         d = latest["date"]
+        news_html = _news_list_html(latest.get("description"))
         cards.append(f"""    <section class="latest">
       <p class="onair"><span class="dot"></span>最新の放送</p>
       <h2>{e(latest['title'])}</h2>
       <p class="date">{d[:4]}.{d[4:6]}.{d[6:]}</p>
-      <audio controls preload="none" src="episodes/{e(latest['file'])}"></audio>
+{news_html}      <audio controls preload="none" src="episodes/{e(latest['file'])}"></audio>
     </section>""")
     for m in rest:
         d = m["date"]
+        news_html = _news_list_html(m.get("description"))
         cards.append(f"""    <article>
       <p class="date">{d[:4]}.{d[4:6]}.{d[6:]}</p>
       <h3>{e(m['title'])}</h3>
-      <audio controls preload="none" src="episodes/{e(m['file'])}"></audio>
+{news_html}      <audio controls preload="none" src="episodes/{e(m['file'])}"></audio>
     </article>""")
 
     credit = show.get("credit")
@@ -359,6 +399,10 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
   article {{ border-top:1px solid var(--line); padding:20px 0 }}
   h3 {{ font-size:1rem; font-weight:600; margin:2px 0 8px }}
   .date {{ color:var(--sub); font-size:.8rem; letter-spacing:.12em }}
+  .news-list {{ list-style:disc; padding-left:1.2em; margin:10px 0 0; color:var(--ink);
+               font-size:.88rem; line-height:1.7 }}
+  .news-list li {{ margin:2px 0 }}
+  .news-list li::marker {{ color:var(--gold) }}
   audio {{ width:100%; margin-top:10px }}
   .credit {{ color:var(--sub); font-size:.72rem; letter-spacing:.04em; margin-top:40px;
             padding-top:16px; border-top:1px solid var(--line) }}
