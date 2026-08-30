@@ -13,7 +13,7 @@ show:
   category: "Technology"
   explicit: false
   credit: "音声: Tαkoe:Style-Bert-VITS2:木角空 / Tαkoe:Style-Bert-VITS2:水巻咲（音源制作: Yumehaki Project V / VSMB Project）"
-  debut_date: "20260830"   # この日の放送だけ番組紹介パートを入れる。運用開始後は空文字にしてよい
+  debut_date: "20260901"   # この日の放送だけ番組紹介パートを入れる。運用開始後は空文字にしてよい
 
 # --------------------------------------------
 # 声エンジン切替: "aivis" / "voicevox" / "elevenlabs"
