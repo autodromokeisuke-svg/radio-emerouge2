@@ -27,6 +27,17 @@ from mutagen.mp3 import MP3
 JST = timezone(timedelta(hours=9))
 
 
+def build_episode_title(show_title: str, dt: datetime) -> str:
+    """放送日から機械的にエピソードタイトルを組み立てる。
+
+    台本生成AIが自由に付けるタイトル文字列は表記が日によってブレる
+    （「木曜日」が付いたり「号」が抜けたりする）ため、配信用タイトルは
+    このように必ずコード側で固定フォーマットに組み立てる。
+    形式: "{show_title} {月}月{日}日号（{月}/{日}）"（ゼロ埋めしない）。
+    """
+    return f"{show_title} {dt.month}月{dt.day}日号（{dt.month}/{dt.day}）"
+
+
 _REQUIRED_META_KEYS = ("date", "pub", "title", "description", "file", "bytes")
 
 

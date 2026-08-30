@@ -20,6 +20,7 @@ from .build_audio import build, export_mp3
 from .collect_news import collect, filter_recent
 from .make_feed import (
     JST,
+    build_episode_title,
     update_site,
     load_recent_glossary_terms,
     load_recent_news_titles,
@@ -93,7 +94,9 @@ def main() -> None:
     if not used_news:
         used_news = news[: cfg["script"].get("max_news", 4)]
     picked = [n["title"] for n in used_news]
-    episode_title = f"{script['title']}（{now.month}/{now.day}）"
+    # 配信タイトルはAIが出力するscript['title']に依存せず、放送日から機械的に組み立てる
+    # （AIが日によって表記を変えたり日付を誤記したりする揺れを根絶するため）
+    episode_title = build_episode_title(show_cfg["title"], now)
     episode_description = ("今日の話題: " + " / ".join(picked) if picked
                            else show_cfg["description"])[:400]
 
