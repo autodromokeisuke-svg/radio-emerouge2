@@ -38,6 +38,8 @@ _DEBUT_INTRO_BLOCK = """## 初回放送の案内（本日限定）
 リスナーにとって今日が初めての放送なので、「以前もお話ししましたが」「前回も少し触れましたが」
 のような、過去の放送を前提にした前置きはこのパートにも他のパートにも入れないこと。
 「自分専用で試験運用していた」といった過去の経緯には一切触れないこと。
+自己紹介では、自分が「AIアシスタントである」ことや使用しているAIモデル名（ChatGPT・Claudeなど）には
+一切触れず、あくまで番組パーソナリティとしての名前・キャラクターだけを紹介すること。
 このパート以外のニュース本数や他のコーナー構成は通常どおり維持すること。
 """
 
@@ -118,6 +120,47 @@ def _format_recent_news_block(recent_news: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+# パーソナリティ（エメ・ルジェ）が自分の正体（使用AIモデル・「中の人」）に一人称で言及していないかの検出。
+# 近接パターンで検出しつつ、「ChatGPTの新機能が発表された」のような第三者的なニュース紹介は
+# 誤検知しないよう、一人称のすぐそばに自己申告的な言い回し（コピュラ等）が続く場合のみ拾う。
+_PRONOUN = r"(?:私たち|僕ら|わたしたち|あたしたち|自分たち|私|僕|わたし|ぼく|あたし|自分)"
+_MODEL_NAME = r"(?:ChatGPT|chatgpt|GPT|Claude|クロード|チャットジーピーティー|チャットGPT|Gemini|ジェミニ|Copilot|コパイロット)"
+_AI_TERM = r"(?:AIアシスタント|言語モデル|LLM|えるえるえむ)"
+_SEP = r"[、,\s]*"
+_SELF_CUE = r"(?:です|だ|なんです|なんだ|なんだよね|なの|なので|ベース)"
+
+_IDENTITY_LEAK_PATTERNS = [
+    re.compile(r"中の人"),
+    # 一人称＋は/も/って＋（実は等）＋モデル名＋自己申告的な語尾（例:「私はChatGPTなので」）
+    re.compile(rf"{_PRONOUN}(?:たち|ら)?{_SEP}(?:は|も|って){_SEP}(?:実は|本当は|じつは)?{_SEP}"
+               rf"{_MODEL_NAME}[-\d.]*(?![のをにへとやも])[^。、]{{0,6}}?{_SELF_CUE}"),
+    # 一人称、実は（本当は/じつは）＋モデル名＋自己申告的な語尾
+    # （例:「僕たち、実はClaudeがベースなんだ」）
+    # モデル名の直後に「の話」「を使う」等が続く場合は、自分の正体ではなく
+    # 話題としてモデルに触れているだけなので検出しない
+    # モデル名の直後に「の」「を」等の助詞が来る場合は、自分の正体ではなく
+    # 話題としてモデルに触れているだけ（例:「実はClaudeの使い方を勉強中」）なので除外する
+    re.compile(rf"{_PRONOUN}(?:たち|ら)?{_SEP}(?:実は|本当は|じつは){_SEP}"
+               rf"{_MODEL_NAME}[-\d.]*(?![のをにへとやも]){_SEP}(?:が|は)?{_SEP}"
+               rf"(?:ベース|そのもの)?{_SEP}{_SELF_CUE}"),
+    # 一人称＋は/も＋AI・AIアシスタント・言語モデル＋です/だ等（例:「私たちはAIなんだ」）
+    re.compile(rf"{_PRONOUN}(?:たち|ら)?{_SEP}(?:は|も){_SEP}(?:AI|{_AI_TERM}){_SEP}"
+               rf"(?:です|だ|なんです|なんだ|なの)"),
+]
+
+
+def _find_identity_leak_lines(lines: list[dict[str, str]]) -> list[str]:
+    """自分の正体（AIモデル・中の人）への言及と疑われるセリフ本文の一覧を返す（無ければ空）。"""
+    hits = []
+    for ln in lines:
+        text = ln.get("text", "")
+        if not text:
+            continue
+        if any(pat.search(text) for pat in _IDENTITY_LEAK_PATTERNS):
+            hits.append(text)
+    return hits
+
+
 def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]],
                          news: list[dict[str, str]]) -> list[str]:
     """「今日のひとこと用語」の妥当性を確認し、問題があれば説明文のリストを返す（例外は投げない）。"""
@@ -148,6 +191,18 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         clean.append({"speaker": sp, "text": tx})
     if len(clean) < 8:
         raise ValueError("有効なセリフが少なすぎる")
+    identity_hits = _find_identity_leak_lines(clean)
+    if identity_hits:
+        raise ValueError(
+            "以下のセリフで、パーソナリティが自分の正体（使用AIモデル・「中の人」）に言及しています: "
+            + " / ".join(f"「{h}」" for h in identity_hits[:3])
+            + "。エメとルジェは番組パーソナリティとしてのみ振る舞い、"
+              "自分自身をChatGPT・Claude・GPT・Gemini等のAIモデル名や「AIアシスタント」「言語モデル」"
+              "「中の人」と結びつける発言を一切せずに書き直してください"
+              "（一人称でモデル名を自称する表現や、正体を匂わせる遠回しな表現も禁止）。"
+              "なお、ChatGPTやClaude、OpenAI・Anthropicなどをニュースの話題として"
+              "第三者的に紹介するのは問題ありません。"
+        )
     glossary_term = data.get("glossary_term")
     if not isinstance(glossary_term, str):
         glossary_term = ""
