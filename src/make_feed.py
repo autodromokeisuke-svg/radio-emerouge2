@@ -202,6 +202,26 @@ def record_used_news(site: Path, date_key: str, items: list[dict[str, str]]) -> 
     path.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _filter_publishable(metas: list[dict[str, Any]], publish_from: str) -> list[dict[str, Any]]:
+    """publish_from（YYYYMMDD）より前の日付のエピソードを除外する。
+
+    配信フィード/配信ページの表示にのみ使うフィルタ。episodes_keepによる
+    自動削除の判定や、用語・ニュースの重複回避履歴には絶対に使わないこと
+    （過去分を参照し続ける必要があるため）。
+
+    publish_from が空文字・未設定・不正な日付形式の場合は、全件をそのまま
+    返す（fail-soft。例外は投げない）。
+    """
+    if not publish_from:
+        return metas
+    try:
+        datetime.strptime(publish_from, "%Y%m%d")
+    except (ValueError, TypeError):
+        print(f"[warn] publish_fromの日付形式が不正なため無視します: {publish_from!r}")
+        return metas
+    return [m for m in metas if m.get("date", "") >= publish_from]
+
+
 def update_site(site: Path, mp3_src: Path, title: str, description: str,
                 base_url: str, show_cfg: dict[str, Any], glossary_term: str = "") -> None:
     episodes = site / "episodes"
@@ -238,11 +258,16 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
         print(f"[ok] 古い放送を削除: {old['date']}")
     metas = _episode_meta(site)
 
+    # ---- フィード/ページへの表示対象を絞り込み ----
+    # ここでの除外は表示のみに影響させる。episodes_keepの削除判定（上のブロック）や
+    # 用語・ニュース履歴（load_recent_glossary_terms等）には一切使わないこと。
+    publish_metas = _filter_publishable(metas, str(show_cfg.get("publish_from", "")))
+
     has_cover = _sync_cover(site)
-    _write_feed(site, metas, base_url, show_cfg, has_cover)
-    _write_index(site, metas, show_cfg, has_cover)
+    _write_feed(site, publish_metas, base_url, show_cfg, has_cover)
+    _write_index(site, publish_metas, show_cfg, has_cover)
     (site / ".nojekyll").write_text("", encoding="utf-8")
-    print(f"[ok] 配信更新: {len(metas)}エピソード / {base_url}/feed.xml")
+    print(f"[ok] 配信更新: {len(publish_metas)}エピソード（保存済み{len(metas)}件） / {base_url}/feed.xml")
 
 
 def _sync_cover(site: Path) -> bool:
