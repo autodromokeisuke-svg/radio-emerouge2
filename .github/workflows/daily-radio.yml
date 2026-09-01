@@ -2,13 +2,14 @@ name: daily-radio
 
 on:
   schedule:
-    # UTC 18:07 = 日本時間 3:07（1本目）。GitHub Actionsのscheduleは高負荷時に遅延するため、
-    # 混雑しやすい0分/30分を避けた半端な分にし、通勤時刻まで余裕を持たせている
-    - cron: "7 18 * * *"
-    # UTC 20:07 = 日本時間 5:07（2本目）。1本目が数時間規模で遅延しても通勤時刻に間に合うよう
-    # 保険として追加。src/run_daily.py 側で本日分が配信済みなら早期スキップするため、
-    # 1本目が定刻通りに動いた日でもClaude APIやActions分数を二重消費しない
-    - cron: "7 20 * * *"
+    # GitHub Actionsのscheduleは実測で毎回3〜5時間遅延する（定刻に動いた日が無い）。
+    # 遅延しても通勤時刻までに1本通るよう、JST 0:07〜3:07に4本仕掛ける。
+    # 本日分が配信済みなら src/run_daily.py が即スキップするので、
+    # 2本目以降が動いてもClaude APIとActions分数は消費しない。
+    - cron: "7 15 * * *"   # JST 0:07
+    - cron: "7 16 * * *"   # JST 1:07
+    - cron: "7 17 * * *"   # JST 2:07
+    - cron: "7 18 * * *"   # JST 3:07
   workflow_dispatch: {}      # 手動実行（テスト用）
 
 permissions:
