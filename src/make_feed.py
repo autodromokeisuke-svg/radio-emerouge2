@@ -104,6 +104,30 @@ def load_recent_glossary_terms(site: Path, days: int = 30) -> list[dict[str, str
     return result
 
 
+def _load_glossary_by_date(site: Path) -> dict[str, str]:
+    """site/glossary_history.json を日数フィルタなしで全件読み、{date: term}の辞書を返す。
+
+    表示用途（番組ページの「今日のひとこと」表示）専用。ファイルが無い/壊れている
+    場合は空辞書を返す（例外を投げない）。
+    """
+    path = site / "glossary_history.json"
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    result = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        date = e.get("date", "")
+        term = e.get("term", "")
+        if date and term:
+            result[date] = term
+    return result
+
+
 def record_glossary_term(site: Path, date_key: str, term: str) -> None:
     """今日使った用語をsite/glossary_history.jsonに記録する。
 
@@ -264,8 +288,9 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
     publish_metas = _filter_publishable(metas, str(show_cfg.get("publish_from", "")))
 
     has_cover = _sync_cover(site)
+    glossary_by_date = _load_glossary_by_date(site)
     _write_feed(site, publish_metas, base_url, show_cfg, has_cover)
-    _write_index(site, publish_metas, show_cfg, has_cover)
+    _write_index(site, publish_metas, show_cfg, has_cover, glossary_by_date)
     (site / ".nojekyll").write_text("", encoding="utf-8")
     print(f"[ok] 配信更新: {len(publish_metas)}エピソード（保存済み{len(metas)}件） / {base_url}/feed.xml")
 
@@ -381,9 +406,26 @@ def _news_list_html(description: str | None) -> str:
     return f'      <ul class="news-list">\n{items}\n      </ul>\n'
 
 
-def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
-                 has_cover: bool) -> None:
+def _glossary_html(glossary: dict[str, str], date: str) -> str:
+    """該当日の「今日のひとこと」用語の<dl>断片を返す。無ければ空文字。
+
+    ラベルと用語を別要素（dt/dd）に分け、コピー時に地続きの一語として
+    混ざらないようにする。
+    """
     e = html.escape
+    term = glossary.get(date, "")
+    if not term:
+        return ""
+    return (f'      <dl class="glossary">\n'
+            f'        <dt>今日のひとこと</dt>\n'
+            f'        <dd>{e(term)}</dd>\n'
+            f'      </dl>\n')
+
+
+def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
+                 has_cover: bool, glossary: dict[str, str] | None = None) -> None:
+    e = html.escape
+    glossary = glossary or {}
     cover_tag = ('<img class="cover" src="cover.jpg" alt="番組カバー">'
                 if has_cover else "")
     latest, *rest = list(reversed(metas)) or [None]
@@ -391,19 +433,21 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
     if latest:
         d = latest["date"]
         news_html = _news_list_html(latest.get("description"))
+        glossary_html = _glossary_html(glossary, d)
         cards.append(f"""    <section class="latest">
       <p class="onair"><span class="dot"></span>最新の放送</p>
       <h2>{e(latest['title'])}</h2>
       <p class="date">{d[:4]}.{d[4:6]}.{d[6:]}</p>
-{news_html}      <audio controls preload="none" src="episodes/{e(latest['file'])}"></audio>
+{news_html}{glossary_html}      <audio controls preload="none" src="episodes/{e(latest['file'])}"></audio>
     </section>""")
     for m in rest:
         d = m["date"]
         news_html = _news_list_html(m.get("description"))
+        glossary_html = _glossary_html(glossary, d)
         cards.append(f"""    <article>
       <p class="date">{d[:4]}.{d[4:6]}.{d[6:]}</p>
       <h3>{e(m['title'])}</h3>
-{news_html}      <audio controls preload="none" src="episodes/{e(m['file'])}"></audio>
+{news_html}{glossary_html}      <audio controls preload="none" src="episodes/{e(m['file'])}"></audio>
     </article>""")
 
     credit = show.get("credit")
@@ -439,6 +483,9 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
                font-size:.88rem; line-height:1.7 }}
   .news-list li {{ margin:2px 0 }}
   .news-list li::marker {{ color:var(--gold) }}
+  .glossary {{ margin:12px 0 0; padding:10px 12px; border:1px solid var(--line); border-radius:4px }}
+  .glossary dt {{ color:var(--sub); font-size:.72rem; letter-spacing:.14em; margin:0 }}
+  .glossary dd {{ color:var(--gold); font-size:1rem; font-weight:600; margin:4px 0 0 }}
   audio {{ width:100%; margin-top:10px }}
   .credit {{ color:var(--sub); font-size:.72rem; letter-spacing:.04em; margin-top:40px;
             padding-top:16px; border-top:1px solid var(--line) }}

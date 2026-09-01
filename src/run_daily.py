@@ -96,7 +96,8 @@ def main() -> None:
     picked = [n["title"] for n in used_news]
     # 配信タイトルはAIが出力するscript['title']に依存せず、放送日から機械的に組み立てる
     # （AIが日によって表記を変えたり日付を誤記したりする揺れを根絶するため）
-    episode_title = build_episode_title(show_cfg["title"], now)
+    episode_title = build_episode_title(
+        show_cfg.get("episode_title_prefix") or show_cfg["title"], now)
     episode_description = ("今日の話題: " + " / ".join(picked) if picked
                            else show_cfg["description"])[:400]
 
