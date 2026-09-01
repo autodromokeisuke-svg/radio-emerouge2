@@ -78,6 +78,12 @@ jobs:
           export SITE_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
           python -m src.run_daily
 
+      - name: 静的ページをsiteへ配置
+        # site/ は gh-pages をチェックアウトして作るため、main側の site/ に置いたファイルは
+        # 残らない。Google OAuth の必須項目であるプライバシーポリシー・利用規約は
+        # site_static/ に置き、デプロイ直前にここでコピーする。
+        run: cp -a site_static/. site/
+
       - name: 配信（GitHub Pagesへデプロイ）
         uses: peaceiris/actions-gh-pages@v4
         with:
