@@ -76,9 +76,13 @@ _GLOSSARY_KEEP_DAYS = 90
 _NEWS_KEEP_DAYS = 30
 
 
-def load_recent_glossary_terms(site: Path, days: int = 30) -> list[dict[str, str]]:
+def load_recent_glossary_terms(site: Path, days: int = 30,
+                               since: str = "") -> list[dict[str, str]]:
     """site/glossary_history.json から、直近days日以内に使った用語一覧を返す。
 
+    since（YYYYMMDD）を渡すと、それより前の日付を除外する。非公開の試験運用期間の
+    放送内容を台本生成AIに見せると、リスナーが知らない放送へ言及してしまうため
+    （詳細は write_script._drop_before_publish のコメント）。
     ファイルが無い/壊れている場合は空リストを返す（例外を投げない）。
     """
     path = site / "glossary_history.json"
@@ -95,6 +99,8 @@ def load_recent_glossary_terms(site: Path, days: int = 30) -> list[dict[str, str
             continue
         date = e.get("date", "")
         term = e.get("term", "")
+        if since and date < since:
+            continue
         try:
             dt = datetime.strptime(date, "%Y%m%d").replace(tzinfo=JST)
         except ValueError:
@@ -162,10 +168,13 @@ def record_glossary_term(site: Path, date_key: str, term: str) -> None:
     path.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def load_recent_news_titles(site: Path, days: int = 7) -> list[dict[str, str]]:
+def load_recent_news_titles(site: Path, days: int = 7,
+                            since: str = "") -> list[dict[str, str]]:
     """site/news_history.json から、直近days日以内に使ったニュース一覧を返す。
 
     各要素は {"date": "20260711", "title": str, "link": str} の形。
+    since（YYYYMMDD）を渡すと、それより前の日付を除外する。理由は
+    load_recent_glossary_terms と同じ。
     ファイルが無い/壊れている場合は空リストを返す（例外を投げない）。
     """
     path = site / "news_history.json"
@@ -183,6 +192,8 @@ def load_recent_news_titles(site: Path, days: int = 7) -> list[dict[str, str]]:
         date = e.get("date", "")
         title = e.get("title", "")
         link = e.get("link", "")
+        if since and date < since:
+            continue
         try:
             dt = datetime.strptime(date, "%Y%m%d").replace(tzinfo=JST)
         except ValueError:

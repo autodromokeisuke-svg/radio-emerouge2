@@ -21,13 +21,23 @@ from src.make_feed import (
 JST = timezone(timedelta(hours=9))
 
 
+def _recent_date_key(days_ago: int = 2) -> str:
+    """days_ago日前の日付キー(YYYYMMDD)。
+
+    テストに日付を直書きすると、時間の経過で days 窓（用語30日・ニュース7日）から
+    外れてテストが恒常的に落ちる。実際に 20260707 直書きの4件がそうなっていた。
+    """
+    return (datetime.now(JST) - timedelta(days=days_ago)).strftime("%Y%m%d")
+
+
 class TestGlossaryHistory(unittest.TestCase):
     def test_record_then_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
-            record_glossary_term(site, "20260707", "フィジカルAI")
+            date_key = _recent_date_key()
+            record_glossary_term(site, date_key, "フィジカルAI")
             terms = load_recent_glossary_terms(site, days=30)
-            self.assertEqual(terms, [{"date": "20260707", "term": "フィジカルAI"}])
+            self.assertEqual(terms, [{"date": date_key, "term": "フィジカルAI"}])
 
     def test_old_entries_excluded_by_days_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,10 +57,11 @@ class TestGlossaryHistory(unittest.TestCase):
     def test_record_same_date_key_overwrites_not_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
-            record_glossary_term(site, "20260707", "フィジカルAI")
-            record_glossary_term(site, "20260707", "OCR")
+            date_key = _recent_date_key()
+            record_glossary_term(site, date_key, "フィジカルAI")
+            record_glossary_term(site, date_key, "OCR")
             terms = load_recent_glossary_terms(site, days=30)
-            self.assertEqual(terms, [{"date": "20260707", "term": "OCR"}])
+            self.assertEqual(terms, [{"date": date_key, "term": "OCR"}])
 
     def test_load_returns_empty_list_when_file_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,14 +87,15 @@ class TestNewsHistory(unittest.TestCase):
     def test_record_then_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
-            record_used_news(site, "20260707", [
+            date_key = _recent_date_key()
+            record_used_news(site, date_key, [
                 {"title": "AI速報", "link": "https://example.com/a"},
                 {"title": "AI速報2", "link": "https://example.com/b"},
             ])
             news = load_recent_news_titles(site, days=30)
             self.assertEqual(news, [
-                {"date": "20260707", "title": "AI速報", "link": "https://example.com/a"},
-                {"date": "20260707", "title": "AI速報2", "link": "https://example.com/b"},
+                {"date": date_key, "title": "AI速報", "link": "https://example.com/a"},
+                {"date": date_key, "title": "AI速報2", "link": "https://example.com/b"},
             ])
 
     def test_old_entries_excluded_by_days_window(self) -> None:
@@ -104,12 +116,13 @@ class TestNewsHistory(unittest.TestCase):
     def test_record_same_date_key_overwrites_not_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             site = Path(tmp)
-            record_used_news(site, "20260707", [{"title": "A", "link": ""}])
-            record_used_news(site, "20260707", [{"title": "B", "link": ""}, {"title": "C", "link": ""}])
+            date_key = _recent_date_key()
+            record_used_news(site, date_key, [{"title": "A", "link": ""}])
+            record_used_news(site, date_key, [{"title": "B", "link": ""}, {"title": "C", "link": ""}])
             news = load_recent_news_titles(site, days=30)
             self.assertEqual(news, [
-                {"date": "20260707", "title": "B", "link": ""},
-                {"date": "20260707", "title": "C", "link": ""},
+                {"date": date_key, "title": "B", "link": ""},
+                {"date": date_key, "title": "C", "link": ""},
             ])
 
     def test_load_returns_empty_list_when_file_missing(self) -> None:
@@ -142,3 +155,50 @@ class TestEpisodeMetaRobustness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHistoryLoadersSinceFilter(unittest.TestCase):
+    """since（公開開始日）より前の放送履歴を読み込まないこと。
+
+    非公開の試験運用期間(2026-08)の履歴が台本生成AIへ渡ると、リスナーの知らない
+    放送へ言及してしまうため（2026-09-03に実発生）。
+    """
+
+    def _dates(self) -> tuple[str, str]:
+        """days窓には確実に入るが、公開開始日を挟む2日分を返す（古い, 新しい）。"""
+        now = datetime.now(JST)
+        return ((now - timedelta(days=3)).strftime("%Y%m%d"),
+                (now - timedelta(days=1)).strftime("%Y%m%d"))
+
+    def test_glossary_since_excludes_older_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            before, after = self._dates()
+            (site / "glossary_history.json").write_text(
+                json.dumps([{"date": before, "term": "非公開期間の用語"},
+                            {"date": after, "term": "公開後の用語"}], ensure_ascii=False),
+                encoding="utf-8")
+            terms = load_recent_glossary_terms(site, days=30, since=after)
+            self.assertEqual(terms, [{"date": after, "term": "公開後の用語"}])
+
+    def test_news_since_excludes_older_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            before, after = self._dates()
+            (site / "news_history.json").write_text(
+                json.dumps([{"date": before, "title": "非公開期間のニュース", "link": ""},
+                            {"date": after, "title": "公開後のニュース", "link": ""}],
+                           ensure_ascii=False),
+                encoding="utf-8")
+            titles = [n["title"] for n in load_recent_news_titles(site, days=7, since=after)]
+            self.assertEqual(titles, ["公開後のニュース"])
+
+    def test_empty_since_keeps_everything_in_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            before, after = self._dates()
+            (site / "news_history.json").write_text(
+                json.dumps([{"date": before, "title": "古い", "link": ""},
+                            {"date": after, "title": "新しい", "link": ""}], ensure_ascii=False),
+                encoding="utf-8")
+            self.assertEqual(len(load_recent_news_titles(site, days=7, since="")), 2)

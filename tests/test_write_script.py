@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.write_script import _check_glossary_term, _format_recent_terms_block, _validate, write_script
+from src.write_script import (_check_glossary_term, _drop_before_publish,
+                              _format_recent_terms_block, _validate, write_script)
 
 
 class TestValidateCoveredNewsIndices(unittest.TestCase):
@@ -162,3 +163,70 @@ class TestFormatRecentTermsBlock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDropBeforePublish(unittest.TestCase):
+    """参照可能な放送履歴を公開開始日(show.publish_from)以降に限定すること。
+
+    非公開の試験運用期間(2026-08)の放送内容がAIへ渡ると、リスナーが存在を知らない
+    放送に「先週も話しましたが」と言及してしまう（2026-09-03に実発生）。
+    """
+
+    def test_drops_entries_before_publish_from(self) -> None:
+        entries = [{"date": "20260831", "term": "アンソロピック"},
+                   {"date": "20260901", "term": "フィジカルAI"},
+                   {"date": "20260902", "term": "AX戦略"}]
+        kept = _drop_before_publish(entries, "20260901", "テスト")
+        self.assertEqual([e["date"] for e in kept], ["20260901", "20260902"])
+
+    def test_keeps_entry_exactly_on_publish_from(self) -> None:
+        kept = _drop_before_publish([{"date": "20260901", "term": "X"}], "20260901", "テスト")
+        self.assertEqual(len(kept), 1)
+
+    def test_empty_publish_from_keeps_everything(self) -> None:
+        """publish_fromが空文字（=全エピソード配信）のときは何も落とさない。"""
+        entries = [{"date": "20260801", "term": "X"}, {"date": "20260901", "term": "Y"}]
+        self.assertEqual(len(_drop_before_publish(entries, "", "テスト")), 2)
+
+    def test_entry_without_date_is_dropped(self) -> None:
+        """dateが欠けたエントリは安全側に倒して除外する。"""
+        self.assertEqual(_drop_before_publish([{"term": "X"}], "20260901", "テスト"), [])
+
+
+class TestWriteScriptHidesPrePublishHistory(unittest.TestCase):
+    """write_scriptがAIへ渡すプロンプトに、公開開始日より前の履歴を含めないこと。"""
+
+    def _run_and_capture_prompt(self, show_cfg: dict) -> str:
+        news = [{"title": "オープンAI次期モデル、極めて高性能",
+                 "summary": "追加安全対策が必要", "source": "s", "link": ""}]
+        payload = {"title": "テスト放送", "glossary_term": "次期モデル",
+                   "covered_news_indices": [1], "lines": _base_lines()}
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _fake_response(payload)
+
+        with patch("src.write_script.Anthropic", return_value=mock_client):
+            write_script(
+                news, {"model": "test-model", "chars_per_minute": 320}, minutes=1,
+                recent_terms=[{"date": "20260830", "term": "AIウォッシング"},
+                              {"date": "20260902", "term": "AX戦略"}],
+                recent_news=[{"date": "20260828", "title": "OpenAIの暴走AI、1200体が結託"},
+                             {"date": "20260902", "title": "霞が関にAI課長？"}],
+                show_cfg=show_cfg,
+            )
+        return mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+
+    def test_pre_publish_history_is_absent_from_prompt(self) -> None:
+        prompt = self._run_and_capture_prompt({"publish_from": "20260901"})
+        # 非公開期間（8月）の話題・用語がプロンプトに現れてはならない
+        self.assertNotIn("OpenAIの暴走AI", prompt)
+        self.assertNotIn("AIウォッシング", prompt)
+        self.assertNotIn("2026-08-28", prompt)
+        self.assertNotIn("2026-08-30", prompt)
+        # 公開後（9月）の履歴は残っていること
+        self.assertIn("霞が関にAI課長？", prompt)
+        self.assertIn("AX戦略", prompt)
+
+    def test_history_is_kept_when_publish_from_is_unset(self) -> None:
+        prompt = self._run_and_capture_prompt({})
+        self.assertIn("OpenAIの暴走AI", prompt)
+        self.assertIn("AIウォッシング", prompt)

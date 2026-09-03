@@ -71,14 +71,18 @@ def main() -> None:
     print("=== 1/4 ニュース収集 ===")
     news = collect(cfg["news_feeds"], cfg.get("keyword_filter", []))
     news_days = int(cfg["script"].get("news_reuse_avoid_days", 7))
-    recent_news = load_recent_news_titles(ROOT / "site", days=news_days)
+    # 参照可能な放送履歴は公開日以降のみ（非公開の試験運用期間へ言及させないため）
+    publish_from = str(show_cfg.get("publish_from", "") or "")
+    recent_news = load_recent_news_titles(ROOT / "site", days=news_days,
+                                          since=publish_from)
     news = filter_recent(news, recent_news)
 
     print("=== 2/4 台本生成 ===")
     script_cfg = dict(cfg["script"])
     script_cfg["chars_per_minute"] = cfg["script"].get("chars_per_minute", 320)
     glossary_days = int(cfg["script"].get("glossary_reuse_avoid_days", 30))
-    recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days)
+    recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days,
+                                              since=publish_from)
     script = write_script(news, script_cfg, minutes=int(show_cfg["minutes"]),
                           recent_terms=recent_terms, recent_news=recent_news,
                           show_cfg=show_cfg)

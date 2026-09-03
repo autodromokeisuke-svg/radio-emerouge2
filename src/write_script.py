@@ -94,6 +94,32 @@ def _extract_json(text: str) -> dict[str, Any]:
     return json.loads(text[start:end + 1])
 
 
+def _drop_before_publish(entries: list[dict[str, str]], publish_from: str,
+                        label: str) -> list[dict[str, str]]:
+    """公開開始日(publish_from, YYYYMMDD)より前の放送履歴を落とす。
+
+    ★この関数を消したり呼び出しを外したりしないこと。
+    番組は2026-08-01から約1ヶ月、非公開で試験運用していた。その期間の放送は
+    show.publish_from によってフィード・番組ページから隠されており、リスナーは
+    存在自体を知らない。にもかかわらず放送履歴（ニュース・今日のひとこと用語）は
+    日数だけで絞っていたため、非公開期間の放送内容が台本生成AIへ渡っていた。
+    プロンプトは重複した話題に「これ、前にも少し触れたんだけど」と断りを入れるよう
+    指示しているため、AIはその指示に忠実に従い、2026-09-03の放送で「先週も話し
+    ましたが」とリスナーの知らない放送へ言及してしまった（公開3日目に「先週」は
+    存在しない）。
+
+    したがって台本生成時にAIが参照してよい放送履歴は「公開日以降」に限る。
+    """
+    if not publish_from:
+        return list(entries)
+    kept = [e for e in entries if str(e.get("date", "")) >= publish_from]
+    dropped = len(entries) - len(kept)
+    if dropped:
+        print(f"[ok] {label}: 公開開始日({publish_from})より前の{dropped}件を"
+              f"参照範囲から除外しました")
+    return kept
+
+
 def _format_recent_terms_block(recent_terms: list[dict[str, str]]) -> str:
     if not recent_terms:
         return "（まだ無し）"
@@ -227,6 +253,15 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
                  recent_news: list[dict[str, str]] | None = None,
                  show_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     target_chars = minutes * int(script_cfg.get("chars_per_minute", 320))
+
+    # 参照可能な放送履歴＝公開日(show.publish_from)以降のみ。呼び出し側でも
+    # 絞っているが、ここでも必ず絞る（片方の修正漏れで非公開期間が漏れないように）。
+    publish_from = str((show_cfg or {}).get("publish_from", "") or "")
+    recent_terms = _drop_before_publish(recent_terms or [], publish_from,
+                                        "今日のひとこと用語の履歴")
+    recent_news = _drop_before_publish(recent_news or [], publish_from,
+                                       "ニュース履歴")
+
     prompt = PROMPT_PATH.read_text(encoding="utf-8").format(
         today=_today_label(),
         tomorrow_label=_tomorrow_label(),
@@ -234,8 +269,8 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         target_chars=target_chars,
         max_news=script_cfg.get("max_news", 4),
         news_block=_news_block(news),
-        recent_terms_block=_format_recent_terms_block(recent_terms or []),
-        recent_news_block=_format_recent_news_block(recent_news or []),
+        recent_terms_block=_format_recent_terms_block(recent_terms),
+        recent_news_block=_format_recent_news_block(recent_news),
         news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 7),
         debut_block=_debut_block(show_cfg),
     )
@@ -252,7 +287,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         text = "".join(b.text for b in resp.content if b.type == "text")
         try:
             data = _validate(_extract_json(text))
-            problems = _check_glossary_term(data, recent_terms or [], news)
+            problems = _check_glossary_term(data, recent_terms, news)
             if problems and attempt < _MAX_ATTEMPTS - 1:
                 raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
             if problems:
