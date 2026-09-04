@@ -83,6 +83,11 @@ def main() -> None:
     glossary_days = int(cfg["script"].get("glossary_reuse_avoid_days", 30))
     recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days,
                                               since=publish_from)
+    # 台本生成AIへ渡す放送履歴の範囲を毎回ログに残す。非公開の試験運用期間へ
+    # 言及してしまった2026-09-03の事故を再発させないための日々の証跡
+    # （write_script側の再フィルタは、ここで既に除外済みだと無言で通るため）
+    print(f"[ok] 参照する放送履歴: 公開開始日={publish_from or '(制限なし)'} / "
+          f"ニュース{len(recent_news)}件・用語{len(recent_terms)}件")
     script = write_script(news, script_cfg, minutes=int(show_cfg["minutes"]),
                           recent_terms=recent_terms, recent_news=recent_news,
                           show_cfg=show_cfg)

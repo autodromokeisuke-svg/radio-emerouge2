@@ -301,7 +301,7 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
     has_cover = _sync_cover(site)
     glossary_by_date = _load_glossary_by_date(site)
     _write_feed(site, publish_metas, base_url, show_cfg, has_cover)
-    _write_index(site, publish_metas, show_cfg, has_cover, glossary_by_date)
+    _write_index(site, publish_metas, show_cfg, has_cover, glossary_by_date, base_url)
     (site / ".nojekyll").write_text("", encoding="utf-8")
     print(f"[ok] 配信更新: {len(publish_metas)}エピソード（保存済み{len(metas)}件） / {base_url}/feed.xml")
 
@@ -433,8 +433,31 @@ def _glossary_html(glossary: dict[str, str], date: str) -> str:
             f'      </dl>\n')
 
 
+def _og_tags(show: dict[str, Any], base_url: str, has_cover: bool) -> str:
+    """XやSlackで共有された際にカードを表示させるOGP/Twitterカードのタグを返す。
+
+    カバー画像は1:1（1400x1400）なので、2:1に切り抜かれる summary_large_image では
+    ジャケットの上下が欠ける。正方形をそのまま出す summary を使う。
+    """
+    e = html.escape
+    base = base_url.rstrip("/")
+    tags = [
+        '<meta property="og:type" content="website">',
+        f'<meta property="og:site_name" content="{e(show["title"])}">',
+        f'<meta property="og:title" content="{e(show["title"])}">',
+        f'<meta property="og:description" content="{e(show["description"])}">',
+        f'<meta property="og:url" content="{e(base)}/">',
+        '<meta name="twitter:card" content="summary">',
+    ]
+    if has_cover:
+        tags.append(f'<meta property="og:image" content="{e(base)}/cover.jpg">')
+        tags.append(f'<meta name="twitter:image" content="{e(base)}/cover.jpg">')
+    return "\n".join(tags)
+
+
 def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
-                 has_cover: bool, glossary: dict[str, str] | None = None) -> None:
+                 has_cover: bool, glossary: dict[str, str] | None = None,
+                 base_url: str = "") -> None:
     e = html.escape
     glossary = glossary or {}
     cover_tag = ('<img class="cover" src="cover.jpg" alt="番組カバー">'
@@ -468,8 +491,8 @@ def _write_index(site: Path, metas: list[dict], show: dict[str, Any],
 <html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex">
 <title>{e(show['title'])}</title>
+{_og_tags(show, base_url, has_cover) if base_url else ''}
 <style>
   :root {{ --bg:#1c1713; --ink:#eae0d0; --sub:#a89a86; --gold:#c9a44c; --line:#3a3128; }}
   * {{ box-sizing:border-box; margin:0 }}

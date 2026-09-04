@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.make_feed import (
+    _write_index,
     _episode_meta,
     load_recent_glossary_terms,
     record_glossary_term,
@@ -202,3 +203,59 @@ class TestHistoryLoadersSinceFilter(unittest.TestCase):
                             {"date": after, "title": "新しい", "link": ""}], ensure_ascii=False),
                 encoding="utf-8")
             self.assertEqual(len(load_recent_news_titles(site, days=7, since="")), 2)
+
+class TestOgpTags(unittest.TestCase):
+    """番組ページのOGP（X等での共有カード）タグ。"""
+
+    SHOW = {"title": "デイリーAIニュース RADIOえめるーじぇ",
+            "description": "毎朝のAIニュース番組。",
+            "author": "えめるーじぇ", "credit": "音声クレジット"}
+    BASE = "https://example.github.io/radio"
+
+    def _render(self, has_cover=True, base_url=BASE):
+        with tempfile.TemporaryDirectory() as td:
+            site = Path(td)
+            metas = [{"date": "20260904", "pub": "Fri, 04 Sep 2026 06:00:00 +0900",
+                      "title": "デイリーAIニュース 9月4日号（9/4）",
+                      "description": "今日の話題: A / B", "file": "radio-20260904.mp3",
+                      "bytes": 100, "duration_sec": 60}]
+            _write_index(site, metas, self.SHOW, has_cover, {}, base_url)
+            return (site / "index.html").read_text(encoding="utf-8")
+
+    def test_ogp_tags_present(self):
+        """og:title/description/url/image と twitter:card が出力される。"""
+        out = self._render()
+        self.assertIn('<meta property="og:title" content="デイリーAIニュース RADIOえめるーじぇ">', out)
+        self.assertIn('<meta property="og:description" content="毎朝のAIニュース番組。">', out)
+        self.assertIn(f'<meta property="og:url" content="{self.BASE}/">', out)
+        self.assertIn(f'<meta property="og:image" content="{self.BASE}/cover.jpg">', out)
+        # カバーは1:1なので、2:1に切り抜かれるlarge系ではなくsummaryを使う
+        self.assertIn('<meta name="twitter:card" content="summary">', out)
+        self.assertNotIn("summary_large_image", out)
+
+    def test_no_image_tag_without_cover(self):
+        """カバー画像が無いときは og:image を出さない（404画像を指さない）。"""
+        out = self._render(has_cover=False)
+        self.assertNotIn("og:image", out)
+        self.assertIn('<meta property="og:title"', out)
+
+    def test_base_url_trailing_slash_is_normalized(self):
+        """base_urlの末尾スラッシュ有無でURLが二重スラッシュにならない。"""
+        out = self._render(base_url=self.BASE + "/")
+        self.assertIn(f'<meta property="og:url" content="{self.BASE}/">', out)
+        self.assertNotIn("radio//", out)
+
+    def test_no_ogp_when_base_url_missing(self):
+        """base_urlが空なら空URLのタグを出さずに済ませる。"""
+        out = self._render(base_url="")
+        self.assertNotIn("og:title", out)
+
+    def test_title_is_escaped(self):
+        """タイトルにHTML特殊文字が入ってもcontent属性を壊さない。"""
+        show = dict(self.SHOW, title='AI & <script>')
+        with tempfile.TemporaryDirectory() as td:
+            site = Path(td)
+            _write_index(site, [], show, True, {}, self.BASE)
+            out = (site / "index.html").read_text(encoding="utf-8")
+        self.assertIn("AI &amp; &lt;script&gt;", out)
+        self.assertNotIn("<script>", out)

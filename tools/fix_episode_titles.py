@@ -34,7 +34,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-    show_title = cfg["show"]["title"]
+    # run_daily.py と同じ優先順位で解決する。ここで show["title"]（番組名フルネーム）を
+    # 使うと「デイリーAIニュース RADIOえめるーじぇ 9月1日号」のような二重表記になる。
+    show_cfg = cfg["show"]
+    show_title = show_cfg.get("episode_title_prefix") or show_cfg["title"]
 
     episodes_dir = ROOT / "site" / "episodes"
     files = sorted(episodes_dir.glob("radio-*.json"))

@@ -72,6 +72,12 @@ jobs:
           echo "engine=$ENGINE"
           bash scripts/start_engine.sh "$ENGINE"
 
+      - name: 過去エピソードのタイトルを現在の表記に揃える
+        # site/ は gh-pages 由来なので、過去回のJSONには改名前のタイトルが残る。
+        # config.yaml の episode_title_prefix を変えたとき、過去回も追随させる。
+        # 変更が無ければ何もしない（冪等）。
+        run: python tools/fix_episode_titles.py --apply
+
       - name: 収録（ニュース→台本→音声→配信ファイル生成）
         run: |
           REPO_NAME="${GITHUB_REPOSITORY#*/}"
