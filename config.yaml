@@ -23,13 +23,21 @@ show:
 # --------------------------------------------
 tts:
   engine: "aivis"
-  pause_ms: 350          # セリフ間の「間」（ミリ秒）
+  pause_ms: 420          # セリフ間の「間」（ミリ秒）。2026-09-07に350から調整（聴き比べでG2案を採用）
 
   aivis:
     base_url: "http://127.0.0.1:10101"
     # 話者は「モデル名」と「スタイル名」で指定（tools/audition.py --list-speakers で一覧確認）
-    eme:  { speaker: "木角空_T2モデル", style: "Positive" }
-    ruje: { speaker: "水巻咲_T2モデル", style: "Positive" }
+    # params は audio_query の合成パラメータを上書きする（tools/audition.py で聴き比べて決めた値）。
+    # エメ=テンション高め（抑揚↑・間短め・やや速め）、ルジェ=ニュース読み向け（抑揚↓・間広め・やや遅め）
+    eme:
+      speaker: "木角空_T2モデル"
+      style: "ノーマル"
+      params: { intonationScale: 1.30, tempoDynamicsScale: 1.45, pauseLengthScale: 1.10, speedScale: 1.02 }
+    ruje:
+      speaker: "水巻咲_T2モデル"
+      style: "ノーマル"
+      params: { intonationScale: 1.00, tempoDynamicsScale: 1.30, pauseLengthScale: 1.30, speedScale: 0.96 }
     # AivisHubの追加モデル(.aivmx)を使う場合、ダウンロードURLをここに列挙
     # （CIが起動時にエンジンへのインストールを試みる）
     extra_model_urls:

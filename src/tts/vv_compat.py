@@ -90,7 +90,14 @@ class VoicevoxCompatTTS(TTSEngine):
 
     # ---------- 合成 ----------
     def query(self, role: str, text: str) -> dict:
-        """audio_query を呼び、合成用クエリJSONを返す（読み確認にも使う）。"""
+        """audio_query を呼び、合成用クエリJSONを返す（読み確認にも使う）。
+
+        config.yaml の当該roleに "params" があれば、audio_queryの既定値
+        （speedScale/intonationScale/tempoDynamicsScale/pauseLengthScale等）
+        をここで上書きする。抑揚・テンポ・間の調整はこの1箇所に集約し、
+        query()/synth_from_query() のどちらの経路（build_audio・reading_check・
+        audition）を通っても同じ調整が効くようにする。
+        """
         sid = self._style_ids[role]
         last_err: Exception | None = None
         for attempt in range(3):
@@ -100,7 +107,9 @@ class VoicevoxCompatTTS(TTSEngine):
                     params={"text": text, "speaker": sid}, timeout=120,
                 )
                 q.raise_for_status()
-                return q.json()
+                query_json = q.json()
+                query_json.update(self.roles[role].get("params", {}))
+                return query_json
             except requests.RequestException as e:
                 last_err = e
                 time.sleep(2 * (attempt + 1))
