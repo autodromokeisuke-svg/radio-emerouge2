@@ -306,6 +306,39 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
     print(f"[ok] 配信更新: {len(publish_metas)}エピソード（保存済み{len(metas)}件） / {base_url}/feed.xml")
 
 
+def write_latest_json(site: Path, *, date_key: str, title: str, news: list[str],
+                      glossary_term: str, episode_url: str, program_page: str,
+                      apple_podcasts_url: str = "", youtube_url: str | None = None) -> None:
+    """外部の自動化ツール（X告知投稿の自動生成など）が「今日の放送内容」を
+    確実に読み取るための、パース不要な単一エンドポイント site/latest.json を書く。
+
+    feed.xmlはXMLのdescriptionにニュースが" / "区切りの1文字列として詰まっており、
+    見出し自体に"/"を含む日があると区切りを誤読しうる。また、cronが3〜5時間遅延し
+    完了時刻が日によってJST 02時台〜11時台までばらつくため、固定時刻で動く外部の
+    スケジュール実行は「今日の放送がまだ出ていない」日を頻繁に踏む。
+    この関数はnewsを配列のまま渡し、dateフィールドを設けることで、呼び出し側が
+    自分の知る「今日の日付」と突き合わせて未生成を機械的に検知できるようにする
+    （このファイル自身に「今日か」を判定させない。判定は読む側の責務）。
+
+    YouTubeアップロードはupdate_site()より後に走る別工程のため、youtube_urlは
+    後から分かった時点でこの関数を呼び直して上書きできる（date_key指定分を再生成
+    するだけで、feed.xml/index.html等は触らない）。
+    """
+    data = {
+        "date": date_key,
+        "generated_at": datetime.now(JST).isoformat(),
+        "title": title,
+        "news": news,
+        "glossary_term": glossary_term,
+        "episode_url": episode_url,
+        "apple_podcasts_url": apple_podcasts_url or None,
+        "youtube_url": youtube_url,
+        "program_page": program_page,
+    }
+    (site / "latest.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def _sync_cover(site: Path) -> bool:
     """assets/cover.jpg があれば site/cover.jpg に同期する。"""
     src = Path(__file__).resolve().parent.parent / "assets" / "cover.jpg"

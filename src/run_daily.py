@@ -25,6 +25,7 @@ from .make_feed import (
     load_recent_glossary_terms,
     load_recent_news_titles,
     record_used_news,
+    write_latest_json,
 )
 from .upload_drive import upload_to_drive
 from .upload_youtube import upload_to_youtube
@@ -127,6 +128,17 @@ def main() -> None:
     record_used_news(ROOT / "site", now.strftime("%Y%m%d"),
                      [{"title": n["title"], "link": n.get("link", "")} for n in used_news])
 
+    # 外部の自動化（X告知投稿の自動生成等）が「今日の放送内容」を確実に読み取れる
+    # よう、site/latest.json を書く。YouTubeのURLはまだ分からないのでNoneのまま
+    # 先に書き、アップロードが成功したら下で上書きする（失敗しても放送は成立する）
+    date_key = now.strftime("%Y%m%d")
+    write_latest_json(
+        ROOT / "site", date_key=date_key, title=episode_title, news=picked,
+        glossary_term=script.get("glossary_term", ""),
+        episode_url=f"{base_url}/episodes/radio-{date_key}.mp3",
+        program_page=f"{base_url}/", apple_podcasts_url=show_cfg.get("apple_podcasts_url", ""),
+    )
+
     # YouTubeは従。動画の変換とアップロードに数分かかるため、主軸である
     # ポッドキャスト配信(update_site)を先に終わらせてから実行する
     youtube_cfg = cfg.get("youtube", {})
@@ -136,6 +148,13 @@ def main() -> None:
         video_id = upload_to_youtube(out_mp3, episode_title, yt_description, cfg)
         if video_id:
             print(f"[ok] YouTubeアップロード完了: https://youtu.be/{video_id}")
+            write_latest_json(
+                ROOT / "site", date_key=date_key, title=episode_title, news=picked,
+                glossary_term=script.get("glossary_term", ""),
+                episode_url=f"{base_url}/episodes/radio-{date_key}.mp3",
+                program_page=f"{base_url}/", apple_podcasts_url=show_cfg.get("apple_podcasts_url", ""),
+                youtube_url=f"https://youtu.be/{video_id}",
+            )
         else:
             print("[skip] YouTubeアップロードはスキップ、または失敗しました（放送生成は継続）")
 
