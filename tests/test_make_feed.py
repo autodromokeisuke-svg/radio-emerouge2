@@ -17,6 +17,7 @@ from src.make_feed import (
     record_glossary_term,
     load_recent_news_titles,
     record_used_news,
+    update_site,
 )
 
 JST = timezone(timedelta(hours=9))
@@ -259,3 +260,49 @@ class TestOgpTags(unittest.TestCase):
             out = (site / "index.html").read_text(encoding="utf-8")
         self.assertIn("AI &amp; &lt;script&gt;", out)
         self.assertNotIn("<script>", out)
+
+
+class TestPinnedEpisodes(unittest.TestCase):
+    """pinned_episodesに載せた日付は episodes_keep のローテーション削除から
+    除外され、永久保存されること（記念すべき初回放送を残すため 2026-09-09追加）。
+    """
+
+    SHOW = {"title": "テスト番組", "description": "desc", "author": "test",
+            "owner_email": "a@b.com", "category": "Technology",
+            "explicit": False, "credit": "credit"}
+
+    def _make_episode(self, episodes: Path, date_key: str) -> None:
+        (episodes / f"radio-{date_key}.mp3").write_bytes(b"dummy")
+        meta = {"date": date_key, "pub": f"{date_key}T00:00:00+09:00",
+                "title": f"放送{date_key}", "description": "desc",
+                "file": f"radio-{date_key}.mp3", "bytes": 5}
+        (episodes / f"radio-{date_key}.json").write_text(
+            json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    def test_pinned_episode_survives_beyond_keep_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            episodes = site / "episodes"
+            episodes.mkdir()
+            today = datetime.now(JST)
+            pinned_date = (today - timedelta(days=100)).strftime("%Y%m%d")
+            # pin対象1本 + keep範囲より古い2本 + 直近14本ぶんのダミー
+            self._make_episode(episodes, pinned_date)
+            old1 = (today - timedelta(days=20)).strftime("%Y%m%d")
+            old2 = (today - timedelta(days=19)).strftime("%Y%m%d")
+            self._make_episode(episodes, old1)
+            self._make_episode(episodes, old2)
+            for i in range(14):
+                self._make_episode(episodes, (today - timedelta(days=13 - i)).strftime("%Y%m%d"))
+
+            show_cfg = dict(self.SHOW, episodes_keep=14, pinned_episodes=[pinned_date])
+            dummy_mp3 = site / "dummy.mp3"
+            dummy_mp3.write_bytes(b"dummy")
+            update_site(site, dummy_mp3, "最新放送", "desc",
+                        "https://example.com", show_cfg)
+
+            remaining = {p.stem.replace("radio-", "") for p in episodes.glob("radio-*.json")}
+            self.assertIn(pinned_date, remaining,
+                          "pinned_episodesに指定した回がepisodes_keepで削除された")
+            self.assertNotIn(old1, remaining, "pin対象外の古い回が削除されていない")
+            self.assertNotIn(old2, remaining, "pin対象外の古い回が削除されていない")

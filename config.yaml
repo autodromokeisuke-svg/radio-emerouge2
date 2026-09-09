@@ -10,6 +10,7 @@ show:
   description: "エメとルジェが毎朝お届けする、通勤のお供AIニュースラジオ。その日のAI・テクノロジーの話題を、ふたりの掛け合いで20分ほどにまとめています。"
   minutes: 30            # 1回の目標尺（分）。慣れたら30に上げてOK（無料エンジンなら追加コストなし）
   episodes_keep: 14      # 配信ページに残すエピソード数（古いものから自動削除）
+  pinned_episodes: ["20260901"]  # ここに載せた日付(YYYYMMDD)はepisodes_keepの対象から除外し永久保存する（記念すべき初回放送）
   owner_email: "emerouge.kei@gmail.com"
   category: "Technology"
   explicit: false

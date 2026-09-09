@@ -284,9 +284,13 @@ def update_site(site: Path, mp3_src: Path, title: str, description: str,
     record_glossary_term(site, date_key, glossary_term)
 
     # ---- 古いエピソードの整理 ----
+    # pinned_episodesに載っている日付（記念放送など）は、episodes_keepの対象から
+    # 除外して永久保存する。ここで除外しておけば以降の削除判定に一切乗らない。
+    pinned = set(show_cfg.get("pinned_episodes") or [])
     metas = _episode_meta(site)
+    deletable = [m for m in metas if m.get("date") not in pinned]
     keep = int(show_cfg.get("episodes_keep", 14))
-    for old in metas[:-keep] if len(metas) > keep else []:
+    for old in deletable[:-keep] if len(deletable) > keep else []:
         for suffix in (".mp3", ".json"):
             p = episodes / old["file"].replace(".mp3", suffix)
             p.unlink(missing_ok=True)
