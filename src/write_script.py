@@ -209,6 +209,75 @@ def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]
     return problems
 
 
+# 「今日のひとこと」はXへの投稿を前提としたコーナーのため、X投稿ルール（Drive
+# 「投稿指示文」正本、2026-09-12にケイスケが共有）の「5. 全面回避・慎重テーマ」を
+# テーマ選定に適用する。RADIO本編のニュース選定には適用しない（依頼範囲外）。
+_GLOSSARY_AVOID_CATEGORIES = """- 政治、選挙、軍事、防衛
+- 医療、法律の具体的助言
+- 株価、決算、M&Aを主題にした内容
+- 自傷、他害、精神的危機
+- 事件・災害への軽率な便乗"""
+
+_GLOSSARY_SAFETY_PROMPT = """次の語は、AIニュースラジオ番組内の「今日のひとこと」コーナーで
+取り上げようとしている用語です。このコーナーはXへの投稿を前提としています。
+
+用語: {term}
+今日のニュース一覧（文脈）:
+{news_block}
+
+以下のカテゴリのいずれかを主題としている場合は blocked を true にしてください。
+{categories}
+
+判定基準:
+- 用語そのものがこれらのカテゴリの主体（政治家・軍事組織・武装勢力・政党・
+  選挙など）である場合や、今日のニュース文脈の中でこの用語が主にこれらの
+  主題として登場している場合は blocked。
+- AI・テクノロジーの話題として登場しており、上記カテゴリを主題としていない
+  場合（単に関連ニュースの中に一度触れられているだけ等）は blocked にしない。
+- 迷う場合は blocked にする（判断に迷うこと自体がリスクのシグナル）。
+
+出力は次のJSON形式のみとしてください（説明文やコードフェンスは不要）:
+{{"blocked": true または false, "category": "該当カテゴリ名（非該当ならから文字列）", "reason": "短い理由"}}
+"""
+
+
+def _check_glossary_topic_safety(term: str, news: list[dict[str, str]], model: str) -> list[str]:
+    """「今日のひとこと用語」がX投稿ルールの全面回避テーマに該当しないかを判定する。
+
+    「フーシ派」のような固有名詞は、政治・軍事関連であることがキーワード一致では
+    判定できない（2026-09-12発覚）。reading_check.pyと同じ設計（小さな分類専用の
+    API呼び出し・fail-soft）で、意味判断が必要なこの種の分類にはAIを使う。
+    API呼び出しやJSONパースに失敗した場合は警告を表示し、ブロックせずに
+    空リストを返す（放送を止めない。デイリー番組を毎回確実に出すことを優先し、
+    最終防波堤は人間の日次確認に委ねる）。
+    """
+    if not term:
+        return []
+    try:
+        news_block = "\n".join(f"- {n.get('title', '')}" for n in news[:10])
+        prompt = _GLOSSARY_SAFETY_PROMPT.format(
+            term=term, news_block=news_block or "（なし）",
+            categories=_GLOSSARY_AVOID_CATEGORIES,
+        )
+        client = Anthropic()
+        resp = client.messages.create(
+            model=model, max_tokens=500,
+            system=("あなたはSNS投稿のテーマ選定を判定するアシスタントです。"
+                    "指定されたJSON形式のみを出力し、それ以外の文字を一切出力しません。"),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        data = _extract_json(text)
+        if data.get("blocked"):
+            category = data.get("category") or "該当カテゴリ不明"
+            reason = data.get("reason") or ""
+            return [f"「{term}」はX投稿ルールの全面回避テーマ（{category}）に該当します: {reason}"]
+        return []
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 今日のひとこと用語のテーマ安全性チェックに失敗（ブロックせず続行）: {e}")
+        return []
+
+
 def _validate(data: dict[str, Any]) -> dict[str, Any]:
     lines = data.get("lines", [])
     if not isinstance(lines, list) or len(lines) < 8:
@@ -288,6 +357,8 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         try:
             data = _validate(_extract_json(text))
             problems = _check_glossary_term(data, recent_terms, news)
+            problems += _check_glossary_topic_safety(
+                data.get("glossary_term", ""), news, script_cfg["model"])
             if problems and attempt < _MAX_ATTEMPTS - 1:
                 raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
             if problems:

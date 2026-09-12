@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.write_script import (_check_glossary_term, _drop_before_publish,
+from src.write_script import (_check_glossary_term, _check_glossary_topic_safety,
+                              _drop_before_publish,
                               _format_recent_terms_block, _validate, write_script)
 
 
@@ -97,6 +98,66 @@ class TestCheckGlossaryTerm(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+class TestCheckGlossaryTopicSafety(unittest.TestCase):
+    """「今日のひとこと」テーマ選定へのX投稿ルール（全面回避テーマ）適用。
+
+    2026-09-12発覚: 9/12放送分の「今日のひとこと」が「フーシ派」（政治・軍事的な
+    武装組織）だった。用語自体がキーワードとして「軍事」等を含まないため、
+    単純な禁止語リストでは検出できない。意味判断が要るためAI（Claude API）で
+    分類する（reading_check.pyと同じ設計）。
+    """
+
+    def _fake_safety_response(self, blocked: bool, category: str = "", reason: str = "") -> MagicMock:
+        return _fake_response({"blocked": blocked, "category": category, "reason": reason})
+
+    def test_blocks_military_political_term(self) -> None:
+        """軍事・政治組織の固有名詞は、キーワードに"軍事"等を含まなくてもブロックする。"""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._fake_safety_response(
+            True, "政治、選挙、軍事、防衛", "武装組織であり軍事・政治が主題のため")
+        with patch("src.write_script.Anthropic", return_value=mock_client):
+            problems = _check_glossary_topic_safety(
+                "フーシ派", [{"title": "AIを使った衝突分析にフーシ派が言及される"}], "test-model")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("フーシ派", problems[0])
+
+    def test_allows_benign_ai_term(self) -> None:
+        """通常のAI技術用語はブロックしない。"""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._fake_safety_response(False)
+        with patch("src.write_script.Anthropic", return_value=mock_client):
+            problems = _check_glossary_topic_safety(
+                "マルチモーダル", [{"title": "新しいマルチモーダルAIモデルが登場"}], "test-model")
+        self.assertEqual(problems, [])
+
+    def test_empty_term_is_not_checked(self) -> None:
+        """空文字はAPIを呼ばずスキップする（無駄なAPI呼び出しをしない）。"""
+        with patch("src.write_script.Anthropic") as mock_anthropic:
+            problems = _check_glossary_topic_safety("", [], "test-model")
+        mock_anthropic.assert_not_called()
+        self.assertEqual(problems, [])
+
+    def test_api_failure_is_fail_soft(self) -> None:
+        """API呼び出しに失敗しても例外を投げず、ブロックせずに続行する
+        （放送を止めないことを優先。最終防波堤は人間の日次確認）。"""
+        with patch("src.write_script.Anthropic", side_effect=RuntimeError("network error")):
+            problems = _check_glossary_topic_safety("何らかの用語", [{"title": "t"}], "test-model")
+        self.assertEqual(problems, [])
+
+    def test_malformed_json_is_fail_soft(self) -> None:
+        """APIが不正なJSONを返しても例外を投げずブロックしない。"""
+        block = MagicMock()
+        block.type = "text"
+        block.text = "これはJSONではありません"
+        resp = MagicMock()
+        resp.content = [block]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = resp
+        with patch("src.write_script.Anthropic", return_value=mock_client):
+            problems = _check_glossary_topic_safety("何らかの用語", [{"title": "t"}], "test-model")
+        self.assertEqual(problems, [])
+
+
 def _fake_response(payload: dict) -> MagicMock:
     block = MagicMock()
     block.type = "text"
@@ -129,7 +190,12 @@ class TestWriteScriptRetriesOnGlossaryReuse(unittest.TestCase):
             _fake_response(good_payload),
         ]
 
-        with patch("src.write_script.Anthropic", return_value=mock_client):
+        # このテストはglossary_term重複時のリトライだけを検証する。テーマ安全性
+        # チェック（別クラスTestCheckGlossaryTopicSafetyで個別に検証）は
+        # write_script内で別途Anthropicを呼ぶため、no-opにして呼び出し回数の
+        # 数え間違いを防ぐ
+        with patch("src.write_script.Anthropic", return_value=mock_client), \
+             patch("src.write_script._check_glossary_topic_safety", return_value=[]):
             result = write_script(
                 news, {"model": "test-model", "chars_per_minute": 320},
                 minutes=1, recent_terms=recent_terms,
@@ -204,7 +270,10 @@ class TestWriteScriptHidesPrePublishHistory(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.messages.create.return_value = _fake_response(payload)
 
-        with patch("src.write_script.Anthropic", return_value=mock_client):
+        # call_args（最後の呼び出し）で台本生成プロンプトを取りたいので、テーマ
+        # 安全性チェック（別途Anthropicを呼ぶ）はno-opにして呼び出し順を汚さない
+        with patch("src.write_script.Anthropic", return_value=mock_client), \
+             patch("src.write_script._check_glossary_topic_safety", return_value=[]):
             write_script(
                 news, {"model": "test-model", "chars_per_minute": 320}, minutes=1,
                 recent_terms=[{"date": "20260830", "term": "AIウォッシング"},

@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import io
 import time
+from pathlib import Path
 from typing import Any
 
 import requests
+import yaml
 from pydub import AudioSegment
 
 from .base import TTSEngine
+
+READING_DICT_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "reading_dict.yaml"
 
 
 class VoicevoxCompatTTS(TTSEngine):
@@ -34,6 +38,7 @@ class VoicevoxCompatTTS(TTSEngine):
     def prepare(self) -> None:
         self._install_extra_models()
         self._resolve_style_ids()
+        self._sync_reading_dict()
 
     def _install_extra_models(self) -> None:
         """AivisHub の追加モデルURLをエンジンにインストール（AivisSpeechのみ）。
@@ -72,6 +77,58 @@ class VoicevoxCompatTTS(TTSEngine):
                 )
             self._style_ids[role] = sid
             print(f"[ok] {role} = {want['speaker']} / {want['style']} (id={sid})")
+
+    def _sync_reading_dict(self) -> None:
+        """assets/reading_dict.yaml の読み間違い対策リストをエンジンのユーザー
+        辞書へ登録する。
+
+        CIは毎回エンジンを新規ダウンロードして起動するため、辞書は空の状態から
+        始まる。このメソッドを毎回呼ぶことだけが唯一の永続化手段（詳細は
+        reading_dict.yaml冒頭のコメント参照）。
+
+        GET /user_dict で既存登録を見て、無ければ追加(POST)、値が違えば更新
+        (PUT)、一致していれば何もしない（同一セッション内での再実行や、既に
+        同じ内容が入っている場合に無駄なAPI呼び出しをしないため）。
+        失敗しても警告のみで続行する（放送を止めない。誤読が直らないだけで
+        放送自体は成立するため）。
+        """
+        try:
+            words = yaml.safe_load(READING_DICT_PATH.read_text(encoding="utf-8")).get("words", [])
+        except (OSError, yaml.YAMLError) as e:
+            print(f"[warn] reading_dict.yamlの読み込みに失敗（辞書登録をスキップ）: {e}")
+            return
+        if not words:
+            return
+
+        try:
+            existing: dict[str, Any] = requests.get(f"{self.base_url}/user_dict", timeout=30).json()
+        except requests.RequestException as e:
+            print(f"[warn] ユーザー辞書の取得に失敗（辞書登録をスキップ）: {e}")
+            return
+        by_surface = {v.get("surface"): (uuid, v) for uuid, v in existing.items()}
+
+        for w in words:
+            surface = w["surface"]
+            pronunciation = w["pronunciation"]
+            accent_type = w.get("accent_type", 0)
+            word_type = w.get("word_type", "PROPER_NOUN")
+            params = {
+                "surface": surface, "pronunciation": pronunciation,
+                "accent_type": accent_type, "word_type": word_type,
+                "priority": w.get("priority", 8),
+            }
+            try:
+                if surface in by_surface:
+                    uuid, cur = by_surface[surface]
+                    if cur.get("pronunciation") == pronunciation and cur.get("accent_type") == accent_type:
+                        continue  # 既に同じ内容が登録済み
+                    r = requests.put(f"{self.base_url}/user_dict_word/{uuid}", params=params, timeout=30)
+                else:
+                    r = requests.post(f"{self.base_url}/user_dict_word", params=params, timeout=30)
+                r.raise_for_status()
+                print(f"[ok] 読み辞書登録: {surface} -> {pronunciation}")
+            except requests.RequestException as e:
+                print(f"[warn] 読み辞書登録に失敗: {surface} ({e})")
 
     @staticmethod
     def _find_style_id(speakers: list[dict], speaker_name: str,
