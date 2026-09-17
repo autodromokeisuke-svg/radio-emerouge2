@@ -10,8 +10,9 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.write_script import (_check_glossary_term, _check_glossary_topic_safety,
-                              _drop_before_publish,
-                              _format_recent_terms_block, _validate, write_script)
+                              _check_ordinal_references, _drop_before_publish,
+                              _format_recent_terms_block, _resolve_used_news,
+                              _validate, write_script)
 
 
 class TestValidateCoveredNewsIndices(unittest.TestCase):
@@ -79,23 +80,98 @@ class TestCheckGlossaryTerm(unittest.TestCase):
 
     def test_valid_term_has_no_problems(self) -> None:
         data = {"glossary_term": "OCR"}
-        problems = _check_glossary_term(data, recent_terms=[], news=self._news())
+        problems = _check_glossary_term(data, recent_terms=[], used_news=self._news())
         self.assertEqual(problems, [])
 
     def test_term_not_in_news_is_flagged(self) -> None:
         data = {"glossary_term": "フィジカルAI"}
-        problems = _check_glossary_term(data, recent_terms=[], news=self._news())
+        problems = _check_glossary_term(data, recent_terms=[], used_news=self._news())
         self.assertTrue(any("見当たりません" in p for p in problems))
 
     def test_recently_used_term_is_flagged(self) -> None:
         data = {"glossary_term": "OCR"}
         recent = [{"date": "20260701", "term": "OCR"}]
-        problems = _check_glossary_term(data, recent_terms=recent, news=self._news())
+        problems = _check_glossary_term(data, recent_terms=recent, used_news=self._news())
         self.assertTrue(any("使用済み" in p for p in problems))
 
     def test_empty_term_has_no_problems(self) -> None:
-        problems = _check_glossary_term({"glossary_term": ""}, recent_terms=[], news=self._news())
+        problems = _check_glossary_term({"glossary_term": ""}, recent_terms=[], used_news=self._news())
         self.assertEqual(problems, [])
+
+    def test_term_only_in_unselected_candidate_is_flagged(self) -> None:
+        """候補全体には載っているが、本編で選ばれなかったニュースの用語は
+        グラウンディング不成立として扱うこと（2026-09-17発覚の再発防止）。"""
+        data = {"glossary_term": "ソフトバンク"}
+        used_news = [{"title": "OCRで手書きメモをデジタル化", "summary": "光学文字認識の新技術"}]
+        problems = _check_glossary_term(data, recent_terms=[], used_news=used_news)
+        self.assertTrue(any("見当たりません" in p for p in problems))
+
+
+class TestResolveUsedNews(unittest.TestCase):
+    """covered_news_indicesから、本編で実際に扱ったニュースを引き当てる。
+
+    run_daily.pyの同名ロジックと一致させる必要がある（ズレると「今日の
+    ひとこと」が参照してよい範囲の判定が本編の実際の内容と食い違う）。
+    """
+
+    def _candidates(self, n: int) -> list[dict[str, str]]:
+        return [{"title": f"候補{i}", "summary": f"概要{i}"} for i in range(1, n + 1)]
+
+    def test_uses_covered_indices_when_present(self) -> None:
+        news = self._candidates(24)  # 候補は最大24件想定
+        data = {"covered_news_indices": [1, 3, 7]}
+        used = _resolve_used_news(data, news, max_news=6)
+        self.assertEqual([u["title"] for u in used], ["候補1", "候補3", "候補7"])
+
+    def test_falls_back_to_max_news_when_indices_empty(self) -> None:
+        news = self._candidates(24)
+        used = _resolve_used_news({"covered_news_indices": []}, news, max_news=6)
+        self.assertEqual(len(used), 6)
+        self.assertEqual(used[0]["title"], "候補1")
+
+    def test_out_of_range_indices_are_ignored(self) -> None:
+        news = self._candidates(5)
+        used = _resolve_used_news({"covered_news_indices": [1, 99, 3]}, news, max_news=6)
+        self.assertEqual([u["title"] for u in used], ["候補1", "候補3"])
+
+
+class TestCheckOrdinalReferences(unittest.TestCase):
+    """「○本目」「○番目」のような順序参照が、本編で実際に扱った本数を
+    超えていないか検証する（2026-09-17発覚: 未選択の7本目=ソフトバンクの
+    ニュースを、あたかも本編で扱ったかのように「今日のひとこと」内で参照していた）。
+    """
+
+    def _lines(self, text: str) -> list[dict[str, str]]:
+        return [{"speaker": "ruje", "text": text}]
+
+    def test_out_of_range_arabic_ordinal_is_flagged(self) -> None:
+        problems = _check_ordinal_references(
+            self._lines("7本目のニュースで話したソフトバンクの件だけど"), covered_count=6)
+        self.assertEqual(len(problems), 1)
+
+    def test_out_of_range_fullwidth_ordinal_is_flagged(self) -> None:
+        problems = _check_ordinal_references(
+            self._lines("７番目で紹介した話だけど"), covered_count=6)
+        self.assertEqual(len(problems), 1)
+
+    def test_out_of_range_kanji_ordinal_is_flagged(self) -> None:
+        problems = _check_ordinal_references(
+            self._lines("七本目のニュースなんだけど"), covered_count=6)
+        self.assertEqual(len(problems), 1)
+
+    def test_in_range_ordinal_is_not_flagged(self) -> None:
+        problems = _check_ordinal_references(
+            self._lines("3本目のニュースで話したように"), covered_count=6)
+        self.assertEqual(problems, [])
+
+    def test_no_ordinal_reference_is_not_flagged(self) -> None:
+        problems = _check_ordinal_references(
+            self._lines("さっきのオープンAIの話だけどね"), covered_count=6)
+        self.assertEqual(problems, [])
+
+    def test_zero_is_flagged(self) -> None:
+        problems = _check_ordinal_references(self._lines("0本目の話"), covered_count=6)
+        self.assertEqual(len(problems), 1)
 
 
 class TestCheckGlossaryTopicSafety(unittest.TestCase):
@@ -203,6 +279,40 @@ class TestWriteScriptRetriesOnGlossaryReuse(unittest.TestCase):
 
         self.assertEqual(result["glossary_term"], "手書きメモ")
         self.assertEqual(mock_client.messages.create.call_count, 2)
+
+
+class TestWriteScriptRetriesOnOutOfRangeOrdinal(unittest.TestCase):
+    """「今日のひとこと」等が、本編で扱っていないニュースを順序参照した場合に
+    自動的に選び直しをリトライすること（2026-09-17発覚の再発防止）。
+    """
+
+    def test_retries_when_ordinal_exceeds_covered_count(self) -> None:
+        news = [{"title": f"候補{i}", "summary": f"概要{i}", "source": "s", "link": ""}
+                for i in range(1, 8)]  # 候補7件（本編で扱うのは1件だけ）
+
+        bad_lines = [{"speaker": "ruje",
+                     "text": "7本目のニュースで話したソフトバンクの件だけどね" + "あ" * 20}] + \
+                    _base_lines()[1:]
+        bad_payload = {"title": "テスト放送", "glossary_term": "候補1",
+                       "covered_news_indices": [1], "lines": bad_lines}
+        good_payload = {"title": "テスト放送", "glossary_term": "候補1",
+                        "covered_news_indices": [1], "lines": _base_lines()}
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            _fake_response(bad_payload),
+            _fake_response(good_payload),
+        ]
+
+        with patch("src.write_script.Anthropic", return_value=mock_client), \
+             patch("src.write_script._check_glossary_topic_safety", return_value=[]):
+            result = write_script(
+                news, {"model": "test-model", "chars_per_minute": 320, "max_news": 1},
+                minutes=1,
+            )
+
+        self.assertEqual(mock_client.messages.create.call_count, 2)
+        self.assertNotIn("7本目", " ".join(ln["text"] for ln in result["lines"]))
 
 
 class TestFormatRecentTermsBlock(unittest.TestCase):

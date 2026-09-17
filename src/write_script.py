@@ -193,19 +193,75 @@ def _find_identity_leak_lines(lines: list[dict[str, str]]) -> list[str]:
     return hits
 
 
+def _resolve_used_news(data: dict[str, Any], news: list[dict[str, str]],
+                       max_news: int) -> list[dict[str, str]]:
+    """AIが実際に本編で扱ったと申告したニュース（covered_news_indices）を、
+    候補リスト(news、最大24件)から引き当てる。
+
+    run_daily.pyの同名ロジック（used_newsの組み立て）と必ず一致させること。
+    ここでズレると、「今日のひとこと」が参照してよい範囲の判定が
+    本編の実際の内容と食い違う（2026-09-17発覚の原因）。
+    """
+    indices = data.get("covered_news_indices") or []
+    used = [news[i - 1] for i in indices if 1 <= i <= len(news)]
+    if not used:
+        used = news[:max_news]
+    return used
+
+
 def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]],
-                         news: list[dict[str, str]]) -> list[str]:
-    """「今日のひとこと用語」の妥当性を確認し、問題があれば説明文のリストを返す（例外は投げない）。"""
+                         used_news: list[dict[str, str]]) -> list[str]:
+    """「今日のひとこと用語」の妥当性を確認し、問題があれば説明文のリストを返す（例外は投げない）。
+
+    used_news は候補全体(最大24件)ではなく、本編で実際に扱った分（通常6件）に
+    限定すること。候補全体を渡すと、選ばれなかったニュースの用語まで
+    「今日のひとこと」で使えてしまう（2026-09-17発覚）。
+    """
     term = (data.get("glossary_term") or "").strip()
     if not term:
         return []
     problems = []
-    haystack = " ".join(f"{n.get('title', '')} {n.get('summary', '')}" for n in news).lower()
+    haystack = " ".join(f"{n.get('title', '')} {n.get('summary', '')}" for n in used_news).lower()
     if term.lower() not in haystack:
-        problems.append(f"「{term}」が今日のニュース候補の中に見当たりません")
+        problems.append(f"「{term}」が本編で実際に扱ったニュースの中に見当たりません")
     recent_norm = {t.get("term", "").strip().lower() for t in recent_terms}
     if term.lower() in recent_norm:
         problems.append(f"「{term}」は直近使用済みです")
+    return problems
+
+
+_KANJI_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+                 "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_ORDINAL_NEWS_RE = re.compile(r"([0-9０-９一二三四五六七八九十]+)\s*(?:本目|番目)")
+_ZEN_TO_HAN = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def _parse_ordinal(token: str) -> int | None:
+    han = token.translate(_ZEN_TO_HAN)
+    if han.isdigit():
+        return int(han)
+    return _KANJI_DIGITS.get(token)
+
+
+def _check_ordinal_references(lines: list[dict[str, str]], covered_count: int) -> list[str]:
+    """セリフ中の「○本目」「○番目」という順序参照が、実際に本編で扱った
+    ニュース本数の範囲内かを確認する（例外は投げない）。
+
+    ニュース候補は最大24件をAIへ提示するが、本編で実際に扱うのはmax_news本
+    （通常6本）だけ。2026-09-17発覚: 「今日のひとこと」内で「7本目のニュース」
+    と、選ばれなかった候補（ソフトバンクのニュース）を本編で扱ったかのように
+    参照していた（本編は6本までしか扱っていない）。
+    """
+    problems = []
+    for ln in lines:
+        text = ln.get("text", "")
+        for m in _ORDINAL_NEWS_RE.finditer(text):
+            n = _parse_ordinal(m.group(1))
+            if n is not None and (n > covered_count or n <= 0):
+                problems.append(
+                    f"セリフ「{text}」の「{m.group(0)}」が、実際に本編で扱った"
+                    f"ニュース{covered_count}本の範囲外を参照しています"
+                )
     return problems
 
 
@@ -356,9 +412,11 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         text = "".join(b.text for b in resp.content if b.type == "text")
         try:
             data = _validate(_extract_json(text))
-            problems = _check_glossary_term(data, recent_terms, news)
+            used_news = _resolve_used_news(data, news, int(script_cfg.get("max_news", 4)))
+            problems = _check_glossary_term(data, recent_terms, used_news)
             problems += _check_glossary_topic_safety(
-                data.get("glossary_term", ""), news, script_cfg["model"])
+                data.get("glossary_term", ""), used_news, script_cfg["model"])
+            problems += _check_ordinal_references(data["lines"], len(used_news))
             if problems and attempt < _MAX_ATTEMPTS - 1:
                 raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
             if problems:
