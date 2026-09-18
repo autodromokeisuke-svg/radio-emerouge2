@@ -46,6 +46,25 @@ _DEBUT_INTRO_BLOCK = """## 初回放送の案内（本日限定）
 """
 
 
+# BGMが初めて入る回（config.yaml の show.bgm_intro_date）だけプロンプトに差し込む指示ブロック。
+# 通常日は空文字。エメとルジェの正体（使用AI・BGMの作り手）には触れさせない。
+_BGM_INTRO_BLOCK = """## BGM導入の案内（本日限定）
+今日から番組にBGMが入った。オープニング（挨拶・日付）の直後、最初のニュースに入る前に、
+エメとルジェの自然な掛け合いで「番組にBGMが入りました！」と軽く紹介すること（2〜4往復、
+30秒程度。尺を圧迫しすぎないこと）。
+- 例: エメがテンション高く気づいて嬉しそうに知らせ、ルジェが落ち着いて「言われてみれば後ろで
+  流れてるね」「通勤中に聴いてもらうのにちょうどいいかも」と受ける、のようなふたりらしい温度差で
+- BGMがあることで通勤・朝の時間がちょっと楽しくなる、というリスナー目線の一言を入れる
+- BGMを誰が・何で作ったか、AIで作ったか等には触れない。エメとルジェは番組パーソナリティとして、
+  「番組にBGMが付いた」という事実だけを喜ぶ
+- 「初めて」「今日から」であることが伝わるようにする。ただし過去の放送を前提にした
+  「以前は無音でしたが」のような言い方はしない（リスナーは前日までの放送を聴いているので、
+  「今日から」は問題ないが、試験運用期間などの過去の経緯には触れない）
+このパート以外の構成（ニュース本数・今日のひとこと・エンディング）は通常どおり維持すること。
+このパートのセリフも section は opening とすること。
+"""
+
+
 def _today_label() -> str:
     now = datetime.now(JST)
     return f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS[now.weekday()]}曜日"
@@ -63,6 +82,20 @@ def _debut_block(show_cfg: dict[str, Any] | None) -> str:
         return ""
     today_key = datetime.now(JST).strftime("%Y%m%d")
     return _DEBUT_INTRO_BLOCK if today_key == debut_date else ""
+
+
+def _bgm_intro_block(show_cfg: dict[str, Any] | None) -> str:
+    """今日が show_cfg['bgm_intro_date']（%Y%m%d, JST基準）と一致する日だけ指示ブロックを返す。
+
+    未設定・空文字なら常に空文字（＝通常運用）。BGMが初めて入る回の冒頭で軽く紹介するため。
+    """
+    if not show_cfg:
+        return ""
+    intro_date = str(show_cfg.get("bgm_intro_date") or "").strip()
+    if not intro_date:
+        return ""
+    today_key = datetime.now(JST).strftime("%Y%m%d")
+    return _BGM_INTRO_BLOCK if today_key == intro_date else ""
 
 
 def _tomorrow_label() -> str:
@@ -418,6 +451,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         recent_news_block=_format_recent_news_block(recent_news),
         news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 7),
         debut_block=_debut_block(show_cfg),
+        bgm_intro_block=_bgm_intro_block(show_cfg),
     )
     client = Anthropic()
     messages = [{"role": "user", "content": prompt}]

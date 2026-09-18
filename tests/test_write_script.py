@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.write_script import (_check_glossary_term, _check_glossary_topic_safety,
-                              _check_ordinal_references, _check_sections,
+                              _bgm_intro_block, _check_ordinal_references, _check_sections,
                               _drop_before_publish,
                               _format_recent_terms_block, _resolve_used_news,
                               _validate, write_script)
@@ -244,6 +244,48 @@ class TestWriteScriptRetriesOnBadSections(unittest.TestCase):
         result, calls = self._run([bad, bad, bad])
         self.assertEqual(calls, 3)
         self.assertEqual(len(result["lines"]), 8)
+
+
+class TestBgmIntroBlock(unittest.TestCase):
+    """BGMが初めて入る回（show.bgm_intro_date）だけ、冒頭でBGM導入を紹介する指示が入る。"""
+
+    def _today(self) -> str:
+        from datetime import datetime
+        from src.write_script import JST
+        return datetime.now(JST).strftime("%Y%m%d")
+
+    def test_block_appears_only_on_the_configured_date(self) -> None:
+        self.assertIn("番組にBGMが入りました", _bgm_intro_block({"bgm_intro_date": self._today()}))
+        self.assertEqual(_bgm_intro_block({"bgm_intro_date": "20000101"}), "")
+
+    def test_unset_or_empty_is_a_normal_day(self) -> None:
+        self.assertEqual(_bgm_intro_block({}), "")
+        self.assertEqual(_bgm_intro_block({"bgm_intro_date": ""}), "")
+        self.assertEqual(_bgm_intro_block(None), "")
+
+    def test_block_does_not_reveal_who_made_the_bgm(self) -> None:
+        """エメとルジェにBGMの作り手・AI利用を語らせない（正体を伏せる方針）。
+        指示文が「触れるな」と明記していること。"""
+        block = _bgm_intro_block({"bgm_intro_date": self._today()})
+        self.assertIn("誰が・何で作ったか", block)
+        self.assertIn("触れない", block)
+
+    def test_block_reaches_the_prompt_only_on_that_day(self) -> None:
+        news = [{"title": "OCR", "summary": "s", "source": "s", "link": ""}]
+        payload = {"title": "t", "glossary_term": "OCR", "covered_news_indices": [1],
+                   "lines": _base_lines()}
+
+        def prompt_for(show_cfg: dict) -> str:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = _fake_response(payload)
+            with patch("src.write_script.Anthropic", return_value=mock_client),                  patch("src.write_script._check_glossary_topic_safety", return_value=[]):
+                write_script(news, {"model": "m", "chars_per_minute": 320}, minutes=1,
+                             show_cfg=show_cfg)
+            return mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+
+        self.assertIn("番組にBGMが入りました", prompt_for({"bgm_intro_date": self._today()}))
+        self.assertNotIn("番組にBGMが入りました", prompt_for({"bgm_intro_date": "20000101"}))
+        self.assertNotIn("番組にBGMが入りました", prompt_for({}))
 
 
 class TestCheckGlossaryTopicSafety(unittest.TestCase):
