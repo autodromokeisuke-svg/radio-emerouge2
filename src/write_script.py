@@ -13,6 +13,8 @@ from typing import Any
 
 from anthropic import Anthropic
 
+from .bgm import SECTION_ORDER, plan_spans
+
 JST = timezone(timedelta(hours=9))
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "assets" / "prompt_script.md"
 
@@ -230,6 +232,22 @@ def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]
     return problems
 
 
+def _check_sections(lines: list[dict[str, str]]) -> list[str]:
+    """各セリフの section ラベル（BGMを流す区間の判定に使う）が正しいか確認する。
+
+    opening → news → glossary → ending の順で、opening/news/ending が1行以上あること。
+    不正でも放送は止めない（write_scriptの最終試行では受容し、build_audioがBGM無しで
+    続行する）。リトライで直せるなら直すために、問題としては報告する。
+    """
+    if plan_spans([ln.get("section", "") for ln in lines]) is not None:
+        return []
+    return [
+        "各セリフの section が不正です。全セリフに opening / news / glossary / ending の"
+        "いずれかを付け、opening → news → glossary → ending の順に並べてください"
+        "（opening・news・ending は必須、glossary は今日のひとこと用語があるときのみ）"
+    ]
+
+
 _KANJI_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
                  "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 _ORDINAL_NEWS_RE = re.compile(r"([0-9０-９一二三四五六七八九十]+)\s*(?:本目|番目)")
@@ -345,7 +363,9 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         sp, tx = ln.get("speaker"), (ln.get("text") or "").strip()
         if sp not in ("eme", "ruje") or not tx:
             continue
-        clean.append({"speaker": sp, "text": tx})
+        section = ln.get("section")
+        clean.append({"speaker": sp, "text": tx,
+                      "section": section if section in SECTION_ORDER else ""})
     if len(clean) < 8:
         raise ValueError("有効なセリフが少なすぎる")
     identity_hits = _find_identity_leak_lines(clean)
@@ -417,6 +437,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
             problems += _check_glossary_topic_safety(
                 data.get("glossary_term", ""), used_news, script_cfg["model"])
             problems += _check_ordinal_references(data["lines"], len(used_news))
+            problems += _check_sections(data["lines"])
             if problems and attempt < _MAX_ATTEMPTS - 1:
                 raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
             if problems:

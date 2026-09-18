@@ -13,6 +13,7 @@ from typing import Any
 from mutagen.id3 import ID3, APIC, ID3NoHeaderError
 from pydub import AudioSegment
 
+from . import bgm as bgm_mod
 from .reading_check import extract_reading, verify_readings
 from .tts import get_engine
 
@@ -102,13 +103,41 @@ def _run_reading_check(engine: Any, lines: list[dict[str, str]],
     return queries
 
 
-def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
-         reading_check_model: str | None = None) -> AudioSegment:
+def _prepare_bgm(lines: list[dict[str, str]], bgm_cfg: dict[str, Any] | None):
+    """BGMを付けられるか判定し、(設定, 区間計画, メイン曲, ニュース曲) を返す。
+
+    付けない（無効・ラベル不正・素材が読めない）場合は None。BGMは付加価値なので、
+    どの理由でも例外にせず、声だけの放送を成立させる。
+    """
+    if bgm_cfg is None:
+        return None
+    settings = bgm_mod.resolve_config(bgm_cfg)
+    if not settings["enabled"]:
+        return None
+    plan = bgm_mod.plan_spans([ln.get("section", "") for ln in lines])
+    if plan is None:
+        print("[warn] セリフのsectionラベルが不正なため、BGM無しで続行します")
+        return None
+    main = bgm_mod.load_track(settings["main_file"])
+    news = bgm_mod.load_track(settings["news_file"])
+    if main is None or news is None:
+        return None
+    return settings, plan, main, news
+
+
+def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
+               reading_check_model: str | None = None,
+               lead_in_ms: int = 0) -> tuple[AudioSegment, list[int]]:
+    """全セリフを合成して声だけの放送を作り、(放送, 各セリフの開始位置ms) を返す。
+
+    lead_in_ms は先頭に足す無音（BGMの曲だけ流すリードイン用）の長さ。
+    BGMを重ねる処理(add_bgm)とは分けてあり、BGMの音量調整時は声の合成結果を使い回せる。
+    """
     engine = get_engine(tts_cfg)
     engine.prepare()
 
     pause = AudioSegment.silent(duration=int(tts_cfg.get("pause_ms", 350)))
-    show = AudioSegment.silent(duration=300)
+    show = AudioSegment.silent(duration=300 + lead_in_ms)
 
     jingle_path = ASSETS / "jingle.mp3"
     jingle = None
@@ -129,7 +158,9 @@ def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
             queries = [None] * total
 
     failed = 0
+    starts_ms = [0] * total  # 各セリフが show の中で始まる位置（BGMの区間切り替えに使う）
     for i, ln in enumerate(lines, 1):
+        starts_ms[i - 1] = len(show)
         try:
             q = queries[i - 1]
             if q is not None:
@@ -148,6 +179,33 @@ def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
 
     if jingle is not None:
         show += jingle
+    return show, starts_ms
+
+
+def add_bgm(show: AudioSegment, starts_ms: list[int], bgm_ctx) -> AudioSegment:
+    """声だけの放送に区間ごとのBGMを重ねる。失敗しても声だけの放送をそのまま返す。"""
+    settings, plan, main_track, news_track = bgm_ctx
+    tail_ms = int(settings["tail_ms"])
+    show = show + AudioSegment.silent(duration=tail_ms)  # 最後の声のあとの余韻ぶん
+    try:
+        mixed = bgm_mod.mix_bgm(show, plan, starts_ms, main_track, news_track,
+                                settings, tail_ms)
+        print("[ok] BGMを重ねました（メイン: オープニング/エンディング、ニュース: 本編〜今日のひとこと）")
+        return mixed
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] BGMのミキシングに失敗（声だけで続行）: {e}")
+        return show
+
+
+def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
+         reading_check_model: str | None = None,
+         bgm_cfg: dict[str, Any] | None = None) -> AudioSegment:
+    bgm_ctx = _prepare_bgm(lines, bgm_cfg)
+    lead_in_ms = int(bgm_ctx[0]["lead_in_ms"]) if bgm_ctx else 0
+
+    show, starts_ms = synthesize(lines, tts_cfg, reading_check_model, lead_in_ms)
+    if bgm_ctx:
+        show = add_bgm(show, starts_ms, bgm_ctx)
 
     minutes = len(show) / 1000 / 60
     print(f"[ok] 収録完了: 約{minutes:.1f}分")

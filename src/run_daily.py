@@ -94,7 +94,8 @@ def main() -> None:
                           show_cfg=show_cfg)
 
     print("=== 3/4 収録 ===")
-    audio = build(script["lines"], cfg["tts"], reading_check_model=cfg["script"]["model"])
+    audio = build(script["lines"], cfg["tts"], reading_check_model=cfg["script"]["model"],
+                  bgm_cfg=cfg.get("bgm", {}))
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)
 

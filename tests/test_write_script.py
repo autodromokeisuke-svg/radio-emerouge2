@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.write_script import (_check_glossary_term, _check_glossary_topic_safety,
-                              _check_ordinal_references, _drop_before_publish,
+                              _check_ordinal_references, _check_sections,
+                              _drop_before_publish,
                               _format_recent_terms_block, _resolve_used_news,
                               _validate, write_script)
 
@@ -174,6 +175,77 @@ class TestCheckOrdinalReferences(unittest.TestCase):
         self.assertEqual(len(problems), 1)
 
 
+class TestSectionLabels(unittest.TestCase):
+    """各セリフの section ラベル（BGMを流す区間の判定用）の引き継ぎと検証。"""
+
+    def _lines(self, sections: list[str]) -> list[dict[str, str]]:
+        return [{"speaker": "eme" if i % 2 == 0 else "ruje", "section": sec, "text": f"セリフ{i}"}
+                for i, sec in enumerate(sections)]
+
+    def test_validate_keeps_valid_section(self) -> None:
+        secs = ["opening", "opening", "news", "news", "news", "glossary", "ending", "ending"]
+        result = _validate({"title": "t", "glossary_term": "x", "lines": self._lines(secs)})
+        self.assertEqual([ln["section"] for ln in result["lines"]], secs)
+
+    def test_validate_blanks_unknown_or_missing_section(self) -> None:
+        lines = self._lines(["opening"] * 8)
+        lines[3]["section"] = "intro"      # 未知の値
+        del lines[4]["section"]            # 欠落
+        result = _validate({"title": "t", "glossary_term": "x", "lines": lines})
+        self.assertEqual(result["lines"][3]["section"], "")
+        self.assertEqual(result["lines"][4]["section"], "")
+        self.assertEqual(result["lines"][0]["section"], "opening")
+
+    def test_check_sections_accepts_valid_order(self) -> None:
+        secs = ["opening", "news", "news", "glossary", "ending"]
+        self.assertEqual(_check_sections(self._lines(secs)), [])
+
+    def test_check_sections_reports_missing_labels(self) -> None:
+        lines = self._lines(["opening", "news", "news", "glossary", "ending"])
+        lines[2]["section"] = ""
+        self.assertEqual(len(_check_sections(lines)), 1)
+
+    def test_check_sections_reports_wrong_order(self) -> None:
+        secs = ["opening", "news", "glossary", "news", "ending"]
+        self.assertEqual(len(_check_sections(self._lines(secs))), 1)
+
+
+class TestWriteScriptRetriesOnBadSections(unittest.TestCase):
+    """sectionが不正な台本は、直せるうちはリトライさせ、最終試行では受容する
+    （BGM無しになるだけで、放送自体は止めない）。"""
+
+    def _payload(self, sections: list[str]) -> dict:
+        lines = _base_lines()
+        for ln, sec in zip(lines, sections):
+            ln["section"] = sec
+        return {"title": "テスト放送", "glossary_term": "OCR",
+                "covered_news_indices": [1], "lines": lines}
+
+    def _run(self, payloads: list[dict]):
+        news = [{"title": "OCRで手書きメモをデジタル化", "summary": "光学文字認識の新技術",
+                 "source": "s", "link": ""}]
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [_fake_response(p) for p in payloads]
+        with patch("src.write_script.Anthropic", return_value=mock_client),              patch("src.write_script._check_glossary_topic_safety", return_value=[]):
+            result = write_script(news, {"model": "test-model", "chars_per_minute": 320},
+                                  minutes=1)
+        return result, mock_client.messages.create.call_count
+
+    def test_retries_when_sections_are_invalid(self) -> None:
+        bad = self._payload([""] * 8)
+        good = self._payload(["opening", "opening", "news", "news", "news", "glossary", "ending", "ending"])
+        result, calls = self._run([bad, good])
+        self.assertEqual(calls, 2)
+        self.assertEqual(result["lines"][0]["section"], "opening")
+
+    def test_accepts_invalid_sections_on_final_attempt(self) -> None:
+        """3回とも不正でも例外にせず台本を返す（BGMが付かないだけで放送は成立する）。"""
+        bad = self._payload([""] * 8)
+        result, calls = self._run([bad, bad, bad])
+        self.assertEqual(calls, 3)
+        self.assertEqual(len(result["lines"]), 8)
+
+
 class TestCheckGlossaryTopicSafety(unittest.TestCase):
     """「今日のひとこと」テーマ選定へのX投稿ルール（全面回避テーマ）適用。
 
@@ -243,8 +315,14 @@ def _fake_response(payload: dict) -> MagicMock:
     return resp
 
 
+# BGMの区間判定用のsectionラベル（opening→news→glossary→ending の順）。
+# write_scriptは各セリフのsectionを検証し、不正ならリトライさせるため、モックの台本にも必要
+_SECTIONS_8 = ["opening", "opening", "news", "news", "news", "glossary", "ending", "ending"]
+
+
 def _base_lines() -> list[dict[str, str]]:
-    return [{"speaker": "eme" if i % 2 == 0 else "ruje", "text": f"セリフ{i}" * 20}
+    return [{"speaker": "eme" if i % 2 == 0 else "ruje", "section": _SECTIONS_8[i],
+             "text": f"セリフ{i}" * 20}
             for i in range(8)]
 
 
