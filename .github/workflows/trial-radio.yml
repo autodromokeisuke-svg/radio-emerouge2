@@ -106,5 +106,5 @@ jobs:
             out/today.mp3
             out/script.json
             out/trial_meta.txt
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
