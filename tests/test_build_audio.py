@@ -1,4 +1,4 @@
-"""_strip_alpha_reading_gloss() / _embed_cover_art() / 読み検証まわりの単体テスト。"""
+"""_fix_known_misreadings() / _embed_cover_art() / 読み検証まわりの単体テスト。"""
 from __future__ import annotations
 
 import sys
@@ -18,32 +18,7 @@ from src.build_audio import (
     _embed_cover_art,
     _fix_known_misreadings,
     _run_reading_check_with_report,
-    _strip_alpha_reading_gloss,
 )
-
-
-class TestStripAlphaReadingGloss(unittest.TestCase):
-    def test_alpha_abbreviation_with_katakana_gloss(self) -> None:
-        self.assertEqual(
-            _strip_alpha_reading_gloss("TSMC（ティーエスエムシー）"),
-            "ティーエスエムシー",
-        )
-
-    def test_alnum_with_hyphen_and_katakana_gloss(self) -> None:
-        self.assertEqual(
-            _strip_alpha_reading_gloss("GPT-4（ジーピーティーフォー）"),
-            "ジーピーティーフォー",
-        )
-
-    def test_kanji_gloss_is_not_replaced(self) -> None:
-        self.assertEqual(
-            _strip_alpha_reading_gloss("AI（人工知能）"),
-            "AI（人工知能）",
-        )
-
-    def test_plain_sentence_without_parentheses_is_unchanged(self) -> None:
-        text = "今日はいい天気だね、ルジェ。"
-        self.assertEqual(_strip_alpha_reading_gloss(text), text)
 
 
 class TestFixKnownMisreadings(unittest.TestCase):

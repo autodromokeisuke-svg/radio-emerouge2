@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -22,25 +21,11 @@ from .reading_check import (
     to_hiragana,
     to_katakana,
 )
+from .reading_normalize import normalize_for_tts
 from .tts import get_engine
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 TARGET_DBFS = -16.0
-
-# 英字略語＋カタカナ読みの二重読み防止パターン
-# 例: "TSMC（ティーエスエムシー）" / "GPT-4(ジーピーティーフォー)" -> カタカナ読みだけに置換
-_ALPHA_READING_GLOSS_RE = re.compile(
-    r"[A-Za-z][A-Za-z0-9\-]*[（(]([ァ-ヴー・]+)[）)]"
-)
-
-
-def _strip_alpha_reading_gloss(text: str) -> str:
-    """「英字（カタカナ読み）」を、英字を消してカタカナ読みだけに置換する。
-
-    括弧内がカタカナ以外の文字を含む場合（例: AI（人工知能））は対象外。
-    """
-    return _ALPHA_READING_GLOSS_RE.sub(r"\1", text)
-
 
 # 音声合成エンジンが繰り返し誤読する語の固定置換（プロンプト指示だけでは
 # 再発したため保険として追加）。「重め/重い」は「じゅうめ/ちょう」等に
@@ -128,20 +113,20 @@ def _find_eligible_occurrences(text: str, surface: str) -> list[int]:
 
     直前の文字が漢字なら、その出現は複合語（「個人」の「人」・「方法」の
     「方」・「安全保障理事会」の「理事会」等）の一部を切り出しただけとみなし
-    除外する。surfaceの末尾が漢字の場合は、直後の文字が漢字でないことも
-    要求する（末尾が複合語の途中で終わっているケースを除外）。
+    除外する。直後が漢字かどうかは、それだけでは複合語の途中か単に次の語が
+    漢字で始まっているだけかを区別できない（「って人多い」の「人」等）ため
+    ここでは判定材料にせず、実際に誤読されている箇所かどうかは後段の
+    `_occurrence_verified`（実測プローブ）と `_scope_ok`（読みの妥当性）に
+    委ねる。
     """
     positions = []
-    ends_with_kanji = bool(surface) and _is_kanji_char(surface[-1])
     start = 0
     while True:
         idx = text.find(surface, start)
         if idx == -1:
             break
         before_ok = idx == 0 or not _is_kanji_char(text[idx - 1])
-        after_idx = idx + len(surface)
-        after_ok = (not ends_with_kanji) or after_idx >= len(text) or not _is_kanji_char(text[after_idx])
-        if before_ok and after_ok:
+        if before_ok:
             positions.append(idx)
         start = idx + len(surface)
     return positions
@@ -228,19 +213,16 @@ def _hiragana_run_after(text: str, idx: int, surf_len: int) -> str:
     return text[start:j]
 
 
-def _scope_ok(text: str, idx: int, surface: str, kanji_part: str, okuri: str,
-             fold_heard: str, fold_correct: str) -> bool:
-    """検証済みの1出現について、correctがsurfaceの読みとして妥当な範囲に
-    収まっているかを検査する（E対策）。1つでも怪しければ弾く。
+def _scope_ok_basic(kanji_part: str, okuri: str, fold_heard: str, fold_correct: str) -> bool:
+    """出現位置に依存しない範囲チェック（E1・E2・E4）。surfaceの出現位置を
+    まだ特定していない段階（エンジン問い合わせによる位置検証の前）でも
+    機械的に弾けるよう、位置依存のE3とは独立させてある。1つでも怪しけ
+    れば弾く。
 
     E1 送り仮名の境界: surfaceが送り仮名okuriで終わるなら、correctの末尾も
        fold(okuri)で終わっていること（境界のウ→オ／イ→エゆれは許容）。
     E2 漢字の拍数の妥当範囲: 漢字n文字に対し、correctの拍数（送り仮名分を
        除く）がn拍〜3n+1拍に収まっていること。
-    E3 前後の仮名との重複: correctの末尾が、直後の仮名（助詞として読まれた
-       場合の表記も含む）の非空prefixと重なっていたり、correctの先頭が、
-       直前の仮名の非空suffixと重なっていたりしないこと（別の語の読みを
-       巻き込んでいる兆候）。
     E4 heardとの長さの妥当性: correctとheardの拍数差が、heardの半分
        （最低2）を超えないこと。
     """
@@ -253,6 +235,20 @@ def _scope_ok(text: str, idx: int, surface: str, kanji_part: str, okuri: str,
     if not (n_kanji <= bound_len <= 3 * n_kanji + 1):
         return False
 
+    if abs(len(fold_correct) - len(fold_heard)) > max(2, len(fold_heard) // 2):
+        return False
+
+    return True
+
+
+def _scope_ok_position(text: str, idx: int, surface: str, fold_correct: str) -> bool:
+    """検証済みの1出現について、位置に依存する範囲チェック（E3）を行う。
+
+    E3 前後の仮名との重複: correctの末尾が、直後の仮名（助詞として読まれた
+       場合の表記も含む）の非空prefixと重なっていたり、correctの先頭が、
+       直前の仮名の非空suffixと重なっていたりしないこと（別の語の読みを
+       巻き込んでいる兆候）。
+    """
     fold_after = normalize_kana(_hiragana_run_after(text, idx, len(surface)))
     fold_before = normalize_kana(_hiragana_run_before(text, idx))
     if fold_after and _overlaps_nonempty_prefix(fold_correct, _f_variants(fold_after)):
@@ -260,10 +256,18 @@ def _scope_ok(text: str, idx: int, surface: str, kanji_part: str, okuri: str,
     if fold_before and _overlaps_nonempty_suffix(fold_correct, fold_before):
         return False
 
-    if abs(len(fold_correct) - len(fold_heard)) > max(2, len(fold_heard) // 2):
-        return False
-
     return True
+
+
+def _scope_ok(text: str, idx: int, surface: str, kanji_part: str, okuri: str,
+             fold_heard: str, fold_correct: str) -> bool:
+    """検証済みの1出現について、correctがsurfaceの読みとして妥当な範囲に
+    収まっているかを検査する（E対策）。位置非依存のE1・E2・E4
+    （`_scope_ok_basic`）と、位置依存のE3（`_scope_ok_position`）を
+    まとめて行う。1つでも怪しければ弾く。
+    """
+    return (_scope_ok_basic(kanji_part, okuri, fold_heard, fold_correct)
+            and _scope_ok_position(text, idx, surface, fold_correct))
 
 
 _TOLERANT_PAIRS = ({"ウ", "オ"}, {"イ", "エ"})
@@ -385,6 +389,14 @@ def _apply_one_correction(engine: Any, speaker: str, line_text: str, current_q: 
         return line_text, current_q, "rejected_scope", {}
     kanji_part, okuri = kanji_okuri
 
+    # 位置非依存の範囲チェック（E1・E2・E4）はエンジン問い合わせが要る
+    # 出現位置の検証より前に済ませる。これによりcorrectが明らかに
+    # heardとかけ離れている／漢字の拍数に見合わない指摘は、エンジンが
+    # 出現位置を1つも検証できない場合でもrejected_scopeとして機械的に
+    # 弾ける（unverified止まりにならない）。
+    if not _scope_ok_basic(kanji_part, okuri, fold_heard, fold_correct):
+        return line_text, current_q, "rejected_scope", {}
+
     eligible = _find_eligible_occurrences(line_text, surface)
     if not eligible:
         return line_text, current_q, "unfixable", {}
@@ -398,7 +410,7 @@ def _apply_one_correction(engine: Any, speaker: str, line_text: str, current_q: 
         return line_text, current_q, "unverified", {}
     idx = verified[0]
 
-    if not _scope_ok(line_text, idx, surface, kanji_part, okuri, fold_heard, fold_correct):
+    if not _scope_ok_position(line_text, idx, surface, fold_correct):
         return line_text, current_q, "rejected_scope", {}
 
     fixed = _fix_occurrence(engine, speaker, line_text, idx, surface, fold_heard,
@@ -551,7 +563,12 @@ def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
         show += jingle + pause
 
     total = len(lines)
-    prepared_texts = [_fix_known_misreadings(_strip_alpha_reading_gloss(ln["text"]))
+    # normalize_for_tts は音声合成・読み検証にだけ使うテキストを整える
+    # （「RAG（ラグ）」のような英字略語＋カナ読みの二重読み対策）。ここが
+    # TTSエンジンおよび読み検証(reading_check)へテキストが渡る直前の唯一の
+    # 適用箇所であり、番組説明文・RSS・字幕・X投稿素材等には適用しない。
+    # カッコの二重読み対策を先に行ってから、既知の誤読を個別置換する。
+    prepared_texts = [_fix_known_misreadings(normalize_for_tts(ln["text"]))
                       for ln in lines]
     queries: list[dict | None] = [None] * total
 

@@ -34,9 +34,9 @@ from src import reading_check as reading_check_mod  # noqa: E402
 from src.build_audio import (  # noqa: E402
     _fix_known_misreadings,
     _run_reading_check_with_report,
-    _strip_alpha_reading_gloss,
 )
 from src.reading_check import extract_reading, kana_contains  # noqa: E402
+from src.reading_normalize import normalize_for_tts  # noqa: E402
 from src.tts import get_engine  # noqa: E402
 
 # 100万トークンあたりの (入力$, 出力$)。前方一致で判定する
@@ -58,7 +58,7 @@ def _price_for(model: str) -> tuple[float, float] | None:
 
 def _prepare(text: str) -> str:
     """build_audio.synthesize() と同じ前処理（本番と条件を揃えるため）。"""
-    return _fix_known_misreadings(_strip_alpha_reading_gloss(text))
+    return _fix_known_misreadings(normalize_for_tts(text))
 
 
 DICT_CHECKS_FILENAME = "dict_checks.json"
