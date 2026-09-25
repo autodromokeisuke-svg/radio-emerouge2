@@ -505,23 +505,27 @@ def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
     texts = list(prepared_texts)
     queries: list[dict | None] = [None] * len(lines)
     pairs = []
+    query_failed = 0
     for i, ln in enumerate(lines):
         try:
             q = engine.query(ln["speaker"], texts[i])
         except Exception as e:  # noqa: BLE001
-            # 台本の行は含めない（下のRuntimeErrorのdocstring参照）。どのセリフで
-            # 失敗したかが分かれば十分で、次回同じ箇所で再現するかの判別に使う。
-            raise _ReadingCheckQueryError(
-                f"セリフ{i + 1}の読み確認クエリに失敗: {type(e).__name__}"
-            ) from e
+            # 台本の行は出さない（このクラスのdocstring参照）。このセリフだけ
+            # 読み検証の対象外にし、フェーズ全体は中断せず残りの検証を続ける
+            # （1セリフのエンジン500が全セリフの読み検証を巻き込んで潰していた事故対策）。
+            query_failed += 1
+            print(f"[warn] セリフ{i + 1}: 読み検証対象外（エンジンエラー: {type(e).__name__}）")
+            queries[i] = None
+            continue
         queries[i] = q
         pairs.append({"index": i + 1, "text": texts[i], "phrases": extract_phrases(q)})
 
     corrections = find_misreadings(pairs, model)
     report = _apply_reading_corrections(engine, lines, texts, queries, corrections)
+    report["query_failed"] = query_failed
     print(f"[ok] 読み検証: 指摘{report['pointed']}件 / 修正{report['applied']}件 / "
           f"検証不能{report['unverified']}件 / 範囲不審で除外{report['rejected_scope']}件 / "
-          f"修正できず{report['unfixable']}件")
+          f"修正できず{report['unfixable']}件 / 読み検証対象外{query_failed}件")
     return queries, report
 
 
@@ -532,6 +536,95 @@ def _run_reading_check(engine: Any, lines: list[dict[str, str]],
     """
     queries, _ = _run_reading_check_with_report(engine, lines, prepared_texts, model)
     return queries
+
+
+# 分割合成時、断片同士をつなぐ無音（セリフ間の pause_ms より明確に短くする）
+_FRAGMENT_PAUSE_MS = 80
+_PUNCT_SPLIT_CHARS = "、。！？!?"
+
+
+def _split_by_punctuation(text: str) -> list[str]:
+    """textを句読点（、。！？!?）で分割する。区切り文字は直前の断片に含める。"""
+    parts: list[str] = []
+    cur = ""
+    for ch in text:
+        cur += ch
+        if ch in _PUNCT_SPLIT_CHARS:
+            parts.append(cur)
+            cur = ""
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def _split_in_half(text: str) -> list[str]:
+    """textをできるだけ真ん中で2つに分ける（句読点が無い/効かない場合の最終手段）。"""
+    mid = len(text) // 2
+    if mid <= 0:
+        return [text]
+    return [text[:mid], text[mid:]]
+
+
+def _synth_fragment_level2(engine: Any, speaker: str, frag: str,
+                           line_no: int, frag_no: int) -> AudioSegment | None:
+    """句読点分割で得た1断片を合成する。失敗したらさらに半分に分けて
+    再試行する（分割はここまでで最大2段）。それでも失敗した部分だけを
+    飛ばし、セリフ番号と断片番号のみをwarnに出す（本文は出さない）。
+    """
+    try:
+        return engine.synth(speaker, frag)
+    except Exception:  # noqa: BLE001
+        pass
+    halves = _split_in_half(frag)
+    if len(halves) <= 1:
+        print(f"[warn] セリフ{line_no}: 断片{frag_no}の合成に失敗し、この断片のみ欠落させます")
+        return None
+    pause = AudioSegment.silent(duration=_FRAGMENT_PAUSE_MS)
+    out = AudioSegment.silent(duration=0)
+    ok = 0
+    for hi, half in enumerate(halves, 1):
+        if not half:
+            continue
+        try:
+            seg = engine.synth(speaker, half)
+        except Exception:  # noqa: BLE001
+            print(f"[warn] セリフ{line_no}: 断片{frag_no}-{hi}の合成に失敗し、この部分のみ欠落させます")
+            continue
+        if ok > 0:
+            out += pause
+        out += seg
+        ok += 1
+    return out if ok > 0 else None
+
+
+def _synth_line_with_recovery(engine: Any, speaker: str, text: str,
+                              line_no: int) -> tuple[AudioSegment, str]:
+    """1セリフの合成本体（engine.synth）が失敗した後の復旧を試みる。
+
+    句読点で分割し、断片ごとに合成して連結する（断片が失敗した場合の
+    さらなる分割は _synth_fragment_level2 に委ねる）。戻り値は
+    (音声, status)。statusは1断片でも合成できれば"recovered"、
+    全断片が失敗すれば"failed"（この場合の音声は無音）。
+    """
+    fragments = _split_by_punctuation(text)
+    if len(fragments) <= 1:
+        fragments = _split_in_half(text)
+
+    pause = AudioSegment.silent(duration=_FRAGMENT_PAUSE_MS)
+    out = AudioSegment.silent(duration=0)
+    ok = 0
+    for fi, frag in enumerate(fragments, 1):
+        if not frag:
+            continue
+        seg = _synth_fragment_level2(engine, speaker, frag, line_no, fi)
+        if seg is None:
+            continue
+        if ok > 0:
+            out += pause
+        out += seg
+        ok += 1
+
+    return (out, "recovered") if ok > 0 else (out, "failed")
 
 
 def _prepare_bgm(lines: list[dict[str, str]], bgm_cfg: dict[str, Any] | None):
@@ -604,16 +697,26 @@ def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
     starts_ms = [0] * total  # 各セリフが show の中で始まる位置（BGMの区間切り替えに使う）
     for i, ln in enumerate(lines, 1):
         starts_ms[i - 1] = len(show)
+        speaker = ln["speaker"]
+        text = prepared_texts[i - 1]
         try:
             q = queries[i - 1]
             if q is not None:
-                seg = engine.synth_from_query(ln["speaker"], q)
+                seg = engine.synth_from_query(speaker, q)
             else:
-                seg = engine.synth(ln["speaker"], prepared_texts[i - 1])
+                seg = engine.synth(speaker, text)
             show += _normalize(seg) + pause
         except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"[warn] セリフ{i}の合成をスキップ: {e}")
+            # 台本の行は出さない（type名だけ。エンジンのエラーメッセージには
+            # リクエストURL＝行そのものが含まれうるため）。まず分割合成での
+            # 復旧を試み、それでも駄目な場合だけこのセリフをスキップする。
+            seg, status = _synth_line_with_recovery(engine, speaker, text, i)
+            if status == "failed":
+                failed += 1
+                print(f"[warn] セリフ{i}の合成をスキップ: {type(e).__name__}")
+            else:
+                show += _normalize(seg) + pause
+                print(f"[fix] セリフ{i}: 分割合成で復旧")
         if i % 10 == 0 or i == total:
             print(f"[..] 収録中 {i}/{total}")
 

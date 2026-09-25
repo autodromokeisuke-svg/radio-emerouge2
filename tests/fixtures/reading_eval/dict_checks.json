@@ -78,5 +78,14 @@
   {"text": "高いだけで成果が出ない「学習しない社員」状態になるって話なんだよ。", "must_contain": "セイカガデナイ", "note": "repro-500", "roles": ["eme", "ruje"]},
   {"text": "高いだけで成果が出ない学習しない社員状態になるって話なんだよ。", "must_contain": "セイカガデナイ", "note": "repro-500", "roles": ["eme", "ruje"]},
   {"text": "「学習しない社員」状態", "must_contain": "ガクシュウシナイシャインジョウタイ", "note": "repro-500", "roles": ["eme", "ruje"]},
-  {"text": "使いっぱなしで改善のループを回せてない", "must_contain": "カイゼンノループ", "note": "repro-500", "roles": ["eme", "ruje"]}
+  {"text": "使いっぱなしで改善のループを回せてない", "must_contain": "カイゼンノループ", "note": "repro-500", "roles": ["eme", "ruje"]},
+
+  {"text": "使いっぱなし", "must_contain": "ツカイッパナシ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "使いっぱなしで", "must_contain": "ツカイッパナシデ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "使いっぱなしで改善の", "must_contain": "ツカイッパナシデカイゼンノ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "改善のループを回せてない", "must_contain": "カイゼンノループヲマワセテナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "ループを回せてない", "must_contain": "ループヲマワセテナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "回せてない", "must_contain": "マワセテナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "回せていない", "must_contain": "マワセテイナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
+  {"text": "ループを回す", "must_contain": "ループヲマワス", "note": "repro-500b", "roles": ["eme", "ruje"]}
 ]

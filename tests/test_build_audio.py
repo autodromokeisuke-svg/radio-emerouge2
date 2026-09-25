@@ -385,6 +385,151 @@ class TestRunReadingCheckWithReport(unittest.TestCase):
         self.assertEqual(report["applied"], 1)
         self.assertEqual(engine.unexpected, [])
 
+    def test_one_line_query_failure_does_not_abort_the_whole_phase(self) -> None:
+        """1セリフのaudio_query失敗（本番で実際に起きた500再現）があっても、
+        読み検証フェーズ全体を中断せず、残りのセリフの検証は続ける。"""
+        lines = [
+            {"speaker": "eme", "text": "おはよう"},
+            {"speaker": "ruje", "text": "使いっぱなしで改善のループを回せてない"},  # これだけqueryが失敗する
+            {"speaker": "eme", "text": "また明日ね"},
+        ]
+        prepared = [ln["text"] for ln in lines]
+        engine = _FakeEngine({
+            "おはよう": _q("オハヨウ"),
+            "また明日ね": _q("マタアシタネ"),
+            # 2行目はresponsesに無いので_FakeEngine.queryがRuntimeErrorを投げる
+        })
+
+        with patch("src.build_audio.find_misreadings", return_value=[]) as fm:
+            queries, report = _run_reading_check_with_report(engine, lines, prepared, "claude-sonnet-4-6")
+
+        # 失敗した2行目だけqueryがNoneのまま、他の2行は通常どおり検証済み
+        self.assertIsNone(queries[1])
+        self.assertEqual(queries[0], _q("オハヨウ"))
+        self.assertEqual(queries[2], _q("マタアシタネ"))
+        self.assertEqual(report["query_failed"], 1)
+
+        # find_misreadingsに渡されたpairsに失敗した2行目は含まれない
+        pairs_arg = fm.call_args[0][0]
+        self.assertEqual([p["index"] for p in pairs_arg], [1, 3])
+
+
+class _FakeSynthEngine:
+    """synthesize()の合成フェーズ用の疑似エンジン。fail_predicate(text)が
+    Trueを返すテキストはengine.synth()が例外を投げる。"""
+
+    def __init__(self, fail_predicate) -> None:
+        self.fail_predicate = fail_predicate
+        self.calls: list[str] = []
+
+    def prepare(self) -> None:
+        pass
+
+    def synth(self, role: str, text: str) -> AudioSegment:
+        self.calls.append(text)
+        if self.fail_predicate(text):
+            raise RuntimeError("boom (engine)")
+        return AudioSegment.silent(duration=50)
+
+    def synth_from_query(self, role: str, query_json: dict) -> AudioSegment:
+        raise AssertionError("このテストではreading_check_modelを渡していないので呼ばれないはず")
+
+
+class TestSynthesizeSplitRecovery(unittest.TestCase):
+    """synthesize()の各セリフ合成が失敗した時の分割合成フォールバック。"""
+
+    def _run(self, lines: list[dict[str, str]], fail_predicate):
+        import io
+        from contextlib import redirect_stdout
+
+        from src.build_audio import synthesize
+
+        engine = _FakeSynthEngine(fail_predicate)
+        buf = io.StringIO()
+        with patch("src.build_audio.get_engine", return_value=engine), redirect_stdout(buf):
+            show, starts_ms = synthesize(lines, tts_cfg={"pause_ms": 10})
+        return show, starts_ms, engine, buf.getvalue()
+
+    def test_normal_case_does_not_split(self) -> None:
+        """正常時（合成が一度も失敗しない）は分割せず、通常の呼び出し1回だけ。
+        分割合成のヘルパーは一切呼ばれない（正常経路が変わっていないことの確認）。"""
+        lines = [
+            {"speaker": "eme", "text": "おはよう"},
+            {"speaker": "ruje", "text": "今日もいい天気だね"},
+        ]
+        with patch("src.build_audio._synth_line_with_recovery") as recovery:
+            show, starts_ms, engine, log = self._run(lines, fail_predicate=lambda t: False)
+
+        recovery.assert_not_called()
+        self.assertEqual(engine.calls, ["おはよう", "今日もいい天気だね"])
+        self.assertNotIn("分割合成", log)
+        self.assertNotIn("スキップ", log)
+
+    def test_recovers_via_punctuation_split_without_losing_the_line(self) -> None:
+        """句読点で区切った断片ごとの合成に落とせば直る失敗（本番の500再現に近い
+        状況）では、セリフを丸ごと欠落させずに分割合成で復旧する。"""
+        full_text = "使いっぱなしで改善のループを回せてない、それでも頑張ろう。"
+        lines = [{"speaker": "ruje", "text": full_text}]
+
+        def fail_predicate(text: str) -> bool:
+            return text == full_text  # フルテキストの時だけ失敗、断片は成功する
+
+        show, starts_ms, engine, log = self._run(lines, fail_predicate)
+
+        self.assertIn(full_text, engine.calls)  # まず通常合成を試みている
+        # 分割された断片（句読点で終わる）が個別に合成されている
+        self.assertIn("使いっぱなしで改善のループを回せてない、", engine.calls)
+        self.assertIn("それでも頑張ろう。", engine.calls)
+        self.assertIn("[fix] セリフ1: 分割合成で復旧", log)
+        self.assertNotIn("スキップ", log)
+        self.assertGreater(len(show), 0)
+
+    def test_recovers_via_second_level_half_split(self) -> None:
+        """句読点分割の断片単体でも失敗する場合、その断片をさらに半分に分けて
+        再試行する（最大2段）ところまで含めて復旧できる。"""
+        frag1 = "使いっぱなしで改善のループを回せてない、"
+        frag2 = "それでも頑張ろう。"
+        full_text = frag1 + frag2
+
+        def fail_predicate(text: str) -> bool:
+            return text in (full_text, frag1)  # フルテキストと1つ目の断片は失敗
+
+        show, starts_ms, engine, log = self._run([{"speaker": "eme", "text": full_text}], fail_predicate)
+
+        self.assertIn(full_text, engine.calls)
+        self.assertIn(frag1, engine.calls)
+        self.assertIn(frag2, engine.calls)
+        mid = len(frag1) // 2
+        self.assertIn(frag1[:mid], engine.calls)
+        self.assertIn(frag1[mid:], engine.calls)
+        self.assertIn("[fix] セリフ1: 分割合成で復旧", log)
+        self.assertNotIn("欠落", log)
+        self.assertNotIn("セリフ1の合成をスキップ", log)
+        self.assertGreater(len(show), 0)
+
+    def test_gives_up_after_two_split_levels_and_skips_only_that_line(self) -> None:
+        """フルテキスト・句読点断片・半分割のいずれも失敗する最小断片は、
+        その部分だけを飛ばし（本文はログに出さない）、他のセリフは正常に
+        収録され、synthesize()自体は例外を投げない。"""
+        bad_text = "AAAA"  # 句読点が無いので半分割のみで、最終的に全滅させる
+        lines = [
+            {"speaker": "eme", "text": "1本目は普通に成功する"},
+            {"speaker": "ruje", "text": bad_text},
+            {"speaker": "eme", "text": "3本目も普通に成功する"},
+            {"speaker": "ruje", "text": "4本目も普通に成功する"},
+            {"speaker": "eme", "text": "5本目も普通に成功する"},
+        ]
+
+        def fail_predicate(text: str) -> bool:
+            # bad_textを含む断片（分割で生まれる部分文字列含む）はすべて失敗させる
+            return "A" in text
+
+        show, starts_ms, engine, log = self._run(lines, fail_predicate)
+
+        self.assertIn("[warn] セリフ2の合成をスキップ: RuntimeError", log)
+        self.assertNotIn(bad_text, log)  # 台本の本文はログに出さない
+        self.assertGreater(len(show), 0)  # 他の4本は収録されている
+
 
 if __name__ == "__main__":
     unittest.main()
