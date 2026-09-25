@@ -1,0 +1,3 @@
+# テスト実行用。本番の依存(requirements.txt)にpytestを足しただけ。
+-r requirements.txt
+pytest>=8,<10

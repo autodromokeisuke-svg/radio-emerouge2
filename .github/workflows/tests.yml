@@ -1,0 +1,48 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "tools/**"
+      - "requirements*.txt"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "tools/**"
+      - "requirements*.txt"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Python準備
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: ffmpegの存在を保証
+        # tests/test_build_audio.py 等がpydub経由でAudioSegment.export(format="mp3")を
+        # 実行するため、ffmpegが無いとテストが失敗する。
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: 依存インストール
+        run: pip install -r requirements-dev.txt
+
+      - name: テスト実行
+        run: python -m pytest -q

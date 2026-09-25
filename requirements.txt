@@ -1,9 +1,16 @@
-anthropic>=0.40
-feedparser>=6.0.11
-google-api-python-client>=2.100
-google-auth>=2.23
-google-auth-oauthlib>=1.2
-mutagen>=1.47
-pydub>=0.25.1
-PyYAML>=6.0
-requests>=2.31
+# 上限（<メジャー）を追加。anthropicが2026-08-20に0.x→1.xへ無断で上がり、
+# CIが検証なしに未知のメジャーバージョンへ進んでしまった事故の再発防止。
+# 下限は既存のまま据え置き、ローカル環境に強制アップグレードを課さない。
+anthropic>=0.40,<2
+feedparser>=6.0.11,<7
+google-api-python-client>=2.100,<3
+google-auth>=2.23,<3
+google-auth-oauthlib>=1.2,<2
+mutagen>=1.47,<2
+pydub>=0.25.1,<0.26
+PyYAML>=6.0,<7
+requests>=2.31,<3
+# pydubの内部依存であるaudioopはPython 3.13で標準ライブラリから削除された。
+# 当面は3.12を使う（CIで固定済み）が、将来3.13以降で動かす場合に備えて
+# 後方互換パッケージを用意しておく。
+audioop-lts>=0.2.2,<0.3; python_version >= "3.13"

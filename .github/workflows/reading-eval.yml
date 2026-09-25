@@ -1,0 +1,73 @@
+name: reading-eval
+
+# 読み検証パイプライン（tools/reading_eval.py）の再現率・コストを実測するための
+# 手動実行専用ワークフロー。ローカルPCにはANTHROPIC_API_KEYが無いため、実際の
+# Claude APIを使った計測はここでしか行えない。日次放送（daily-radio.yml）とは
+# 無関係で、何も配信しない（Pagesへのデプロイ等は一切行わない）。
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "評価するモデル（カンマ区切り）"
+        required: false
+        default: "claude-sonnet-4-6"
+      dict_only:
+        description: "辞書検証のみ実行する（--dict-only）"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Python準備
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: 声エンジンのキャッシュ
+        uses: actions/cache@v6
+        with:
+          path: |
+            .engine
+            ~/.local/share/AivisSpeech-Engine
+            ~/.cache/huggingface
+          key: tts-engine-1.2.0-${{ hashFiles('scripts/start_engine.sh') }}
+
+      - name: 7z・ffmpegの存在を保証
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full ffmpeg
+
+      - name: 声エンジン起動
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ENGINE=$(python -c "import yaml;print(yaml.safe_load(open('config.yaml'))['tts']['engine'])")
+          echo "engine=$ENGINE"
+          bash scripts/start_engine.sh "$ENGINE"
+
+      - name: 読み検証の再現率・コストを評価
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # run:内で ${{ }} を直接展開するとシェルインジェクションの余地があるため
+          # （このステップはANTHROPIC_API_KEYを保持している）、env経由で受け渡す。
+          MODELS: ${{ inputs.models }}
+          DICT_ONLY: ${{ inputs.dict_only }}
+        run: |
+          ARGS=(--models "$MODELS")
+          if [ "$DICT_ONLY" = "true" ]; then
+            ARGS+=(--dict-only)
+          fi
+          python tools/reading_eval.py "${ARGS[@]}"

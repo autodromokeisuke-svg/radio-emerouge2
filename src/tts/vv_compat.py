@@ -11,6 +11,7 @@ AivisSpeech Engine は VOICEVOX 互換の HTTP API を提供しているため�
 from __future__ import annotations
 
 import io
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -86,12 +87,24 @@ class VoicevoxCompatTTS(TTSEngine):
         始まる。このメソッドを毎回呼ぶことだけが唯一の永続化手段（詳細は
         reading_dict.yaml冒頭のコメント参照）。
 
-        GET /user_dict で既存登録を見て、無ければ追加(POST)、値が違えば更新
-        (PUT)、一致していれば何もしない（同一セッション内での再実行や、既に
-        同じ内容が入っている場合に無駄なAPI呼び出しをしないため）。
+        GET /user_dict で既存登録を見て、無ければ追加(POST)、pronunciation・
+        accent_type・priorityのいずれかが違えば更新(PUT)、全て一致していれば
+        何もしない（同一セッション内での再実行や、既に同じ内容が入っている
+        場合に無駄なAPI呼び出しをしないため。priorityだけyaml側で変えても
+        更新が反映されない事故を防ぐため、priorityも比較対象に含めている）。
         失敗しても警告のみで続行する（放送を止めない。誤読が直らないだけで
         放送自体は成立するため）。
+
+        CI（環境変数 GITHUB_ACTIONS=true）以外では実行しない。ローカルPCの
+        AivisSpeechは手元で育てた個人辞書を使っており、tools/audition.py や
+        tools/bgm_preview.py をローカルで実行するたびに黙って書き換えていた
+        （2026-09-25発覚）。ローカルで同期を試したい場合だけ
+        RADIO_SYNC_READING_DICT=1 を明示的に付けて実行すること。
         """
+        if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("RADIO_SYNC_READING_DICT") != "1":
+            print("[skip] 読み辞書の同期はCI専用のためスキップ（ローカルPCの個人辞書を保護。"
+                  "試すには環境変数 RADIO_SYNC_READING_DICT=1 を付けて実行）")
+            return
         try:
             words = yaml.safe_load(READING_DICT_PATH.read_text(encoding="utf-8")).get("words", [])
         except (OSError, yaml.YAMLError) as e:
@@ -120,8 +133,9 @@ class VoicevoxCompatTTS(TTSEngine):
             try:
                 if surface in by_surface:
                     uuid, cur = by_surface[surface]
-                    if cur.get("pronunciation") == pronunciation and cur.get("accent_type") == accent_type:
-                        continue  # 既に同じ内容が登録済み
+                    if (cur.get("pronunciation") == pronunciation and cur.get("accent_type") == accent_type
+                            and cur.get("priority") == params["priority"]):
+                        continue  # 既に同じ内容が登録済み（pronunciation/accent_type/priorityが全て一致）
                     r = requests.put(f"{self.base_url}/user_dict_word/{uuid}", params=params, timeout=30)
                 else:
                     r = requests.post(f"{self.base_url}/user_dict_word", params=params, timeout=30)

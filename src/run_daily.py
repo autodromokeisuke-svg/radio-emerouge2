@@ -94,7 +94,11 @@ def main() -> None:
                           show_cfg=show_cfg)
 
     print("=== 3/4 収録 ===")
-    audio = build(script["lines"], cfg["tts"], reading_check_model=cfg["script"]["model"],
+    # 読み検証だけ別モデルを使いたい場合はconfig.yamlに script.reading_check_model を
+    # 足す（未設定なら従来どおり台本生成と同じモデル）。config.yaml自体は変更しない
+    # （番組の中身に関わる設定はケイスケの承認が必要なため、今回はフォールバックのみ実装）
+    reading_check_model = cfg["script"].get("reading_check_model") or cfg["script"]["model"]
+    audio = build(script["lines"], cfg["tts"], reading_check_model=reading_check_model,
                   bgm_cfg=cfg.get("bgm", {}))
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)

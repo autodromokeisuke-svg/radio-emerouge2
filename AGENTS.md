@@ -1,4 +1,4 @@
-# CLAUDE.md — RADIOえめるーじぇ
+# AGENTS.md — RADIOえめるーじぇ
 
 エメとルジェが毎朝AIニュースを届ける自分専用ラジオ。GitHub Actionsで全自動生成し、
 GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電源状態に依存しないこと。
@@ -13,13 +13,13 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 | 雑務 | `chores` | haiku | ファイル整形・リネーム・ドキュメント微修正・依存追加・ログ確認 |
 | 難所 | `heavy-debugger` | opus | implementerが2回失敗した不具合の原因究明のみ（乱用禁止） |
 
-- エージェント定義は `.claude/agents/` にあり、frontmatterの `model` でモデル固定済み
+- エージェント定義は `.Codex/agents/` にあり、frontmatterの `model` でモデル固定済み
 - 判断に迷う作業は「安い方に振ってみて、ダメなら1段上げる」
-- メインが直接編集してよいのは、このCLAUDE.md自身と設計メモ程度
+- メインが直接編集してよいのは、このAGENTS.md自身と設計メモ程度
 
 ## 初回セットアップ・ランブック（この順で進める）
 
-人間側の事前準備は `docs/SETUP.md` 参照。以下はClaude Codeが主導する。
+人間側の事前準備は `docs/SETUP.md` 参照。以下はCodexが主導する。
 
 1. **前提確認**: `gh auth status` / `git --version` / `ffmpeg -version` / Python 3.11+。
    足りないものはインストール手順を提示（chores可）
@@ -41,25 +41,14 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 
 ## VERIFYリスト（推測で書いた箇所。初回に必ず実機確認）
 
-2026-09-25棚卸し: 本番ログ（9/9〜9/23の15回）と `gh release view` で確認済み。
-
-- [x] `scripts/start_engine.sh` のアセット名パターン → 1.2.0 の
-      `AivisSpeech-Engine-Linux-x64-1.2.0.7z.001` に一致。バージョンは `AIVIS_ENGINE_VERSION` で固定済み
-- [x] 起動フラグ `--host/--port` とポート10101 → 全実行で「エンジン準備OK ("1.2.0")」
-- [x] 追加モデルインストールAPI（/aivm_models/install）→ extra_model_urls の2モデルで稼働中
-- [x] 話者・スタイル → Anneliは不使用。現行は 木角空_T2モデル / 水巻咲_T2モデル の「ノーマル」
-- [ ] VOICEVOX側デフォルト話者名（使う場合のみ。Dockerタグは cpu-0.25.2 に更新済み・未実行）
-
-## 定期点検（放っておくと止まるもの）
-
-- **publicリポジトリは60日間活動が無いとscheduleが自動停止する**（旧リポジトリ
-  radio-emerouge は実際に 2026-09-12 に `disabled_inactivity` になった）。mainへの
-  コミットが60日空きそうなら1コミット入れるか、`gh api repos/autodromokeisuke-svg/radio-emerouge2/actions/workflows --jq '.workflows[]|"\(.name) \(.state)"'`
-  で状態を確認し、止まっていたら `gh workflow enable daily-radio -R autodromokeisuke-svg/radio-emerouge2`
-- `runs-on: ubuntu-24.04` に固定中。ubuntu-latest は 2026-10-19〜11-19 に 26.04 へ移行する。
-  移行するなら先に workflow_dispatch で ubuntu-26.04 を試す
-- 声エンジンは 1.2.0 に固定。上げる時は `scripts/start_engine.sh` の `AIVIS_ENGINE_VERSION` を変え、
-  `reading-eval` ワークフローで読みの変化を確認してから
+- [ ] `scripts/start_engine.sh` のAivisSpeech Engineリリースアセット名の
+      `--pattern`（`gh release view --repo Aivis-Project/AivisSpeech-Engine` で確認）
+- [ ] 同エンジンの起動フラグ（`./run --help`）とポート10101
+- [ ] `src/tts/vv_compat.py` の追加モデルインストールAPI（/aivm_models系）。
+      extra_model_urls未使用のうちは放置でよい
+- [ ] config.yaml のAnneliスタイル名（「テンション高め」「落ち着き」）が
+      実際のスタイル名と一致するか（`python tools/audition.py --list-speakers`）
+- [ ] VOICEVOX側デフォルト話者名（使う場合のみ）
 
 ## 守り（えめるーじぇ流）
 
@@ -67,7 +56,7 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 - `--dangerously-skip-permissions` は使わない
 - config.yaml と assets/prompt_script.md の内容変更は必ずケイスケに確認を取る
   （番組の中身＝看板だから）
-- 依存追加やワークフロー変更時は、月間コスト影響（Claude API・Actions分数）を一言添える
+- 依存追加やワークフロー変更時は、月間コスト影響（Codex API・Actions分数）を一言添える
 
 ## 日常運用コマンド
 
@@ -75,10 +64,3 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 - 尺の変更: config.yaml `show.minutes`
 - 声優交代: config.yaml `tts.engine`（aivis / voicevox / elevenlabs）
 - ElevenLabs切替時: `gh secret set ELEVENLABS_API_KEY` + voice_id 2つをconfigへ
-- 読み間違いの報告が来たら: 実機で誤読条件を特定 → 文脈に関係なく誤読する語は
-  `assets/reading_dict.yaml` へ（巻き込み確認の文も `tests/fixtures/reading_eval/dict_checks.json` へ）、
-  文脈依存の誤読は読み検証（`src/reading_check.py`）に任せる。効果の実測は
-  `gh workflow run reading-eval -R autodromokeisuke-svg/radio-emerouge2`（Claude APIを少額消費。
-  `-f dict_only=true` ならAPI不使用で辞書だけ検証）
-- ローカルで `tools/audition.py` 等を動かしても、個人のAivisSpeech辞書は書き換えない
-  （辞書同期はCI専用。試す時だけ `RADIO_SYNC_READING_DICT=1`）

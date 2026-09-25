@@ -21,52 +21,109 @@ concurrency:
 
 jobs:
   broadcast:
-    runs-on: ubuntu-latest
+    # ubuntu-latestは2026-10-19〜11-19の間にUbuntu 26.04へ切り替わる予定で、
+    # p7zip-fullが仮想パッケージになる等の破壊的変更を含む（監査済み）。
+    # 影響を見極めるまでubuntu-24.04に固定する。切り替える時はまず
+    # workflow_dispatchでubuntu-26.04を試してから変更すること。
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-      GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
-      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: リポジトリ取得
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: 過去エピソード取得（gh-pages。初回は存在しないのでスキップ可）
-        uses: actions/checkout@v4
+        id: checkout_gh_pages
+        uses: actions/checkout@v7
         continue-on-error: true
         with:
           ref: gh-pages
           path: site
+          persist-credentials: false
 
       - name: siteの.gitを除去
         run: rm -rf site/.git || true
 
+      - name: gh-pages取得の成否を確認
+        # 上のステップはcontinue-on-error: trueで「初回（gh-pagesがまだ無い）」を許容している。
+        # feed.xmlがあればOK。無い場合、チェックアウト自体が成功していた（＝gh-pagesは
+        # 存在するのに中身が空）なら、後段のforce_orphan: trueデプロイで過去エピソード
+        # （9/1の永久保存回を含む）が全て消えてしまうため停止する。
+        # チェックアウトが失敗していた場合は、それが本当に「新規リポジトリでgh-pagesが
+        # まだ存在しない」だけなのかを ls-remote で見分ける（公開リポジトリなのでトークン不要）。
+        # 存在しないなら初回として続行し、存在するのに失敗したなら安全側で停止する。
+        run: |
+          if [ -f site/feed.xml ]; then
+            echo "gh-pages取得OK（feed.xml確認済み）"
+            exit 0
+          fi
+          if [ "${{ steps.checkout_gh_pages.outcome }}" = "success" ]; then
+            echo "gh-pagesブランチは取得できましたがfeed.xmlがありません。空デプロイを避けるため停止します。"
+            exit 1
+          fi
+          set +e
+          git ls-remote --exit-code --heads "https://github.com/${GITHUB_REPOSITORY}.git" gh-pages
+          RC=$?
+          set -e
+          if [ "$RC" = "2" ]; then
+            echo "gh-pagesブランチがまだ存在しません（新規リポジトリの初回実行）。続行します。"
+          else
+            echo "gh-pagesの取得に失敗した可能性があります（feed.xmlが無い）。空デプロイを避けるため停止します。"
+            exit 1
+          fi
+
+      - name: 本日分の配信済みチェック（早期スキップ）
+        # schedule起動の2本目以降で本日分が既にあれば、ここで全ステップをスキップする。
+        # src/run_daily.py側にも同じ判定（_should_skip_scheduled_run）があるが、
+        # ここで止めればPython準備・依存インストール・声エンジン起動・再デプロイ（約225MBの
+        # force push）まで丸ごと省略できる。日付の求め方はsrc/run_daily.pyの
+        # _today_mp3_name / make_feed.update_site と同一（JSTで%Y%m%d）にすること。
+        id: skip
+        if: github.event_name == 'schedule'
+        run: |
+          DATE_KEY="$(TZ=Asia/Tokyo date +%Y%m%d)"
+          if [ -f "site/episodes/radio-${DATE_KEY}.mp3" ]; then
+            echo "本日分は配信済みのためスキップします (radio-${DATE_KEY}.mp3)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Python準備
-        uses: actions/setup-python@v5
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/setup-python@v7
         with:
+          # pydubがaudioopに依存しており、audioopはPython 3.13で標準ライブラリから削除された。
+          # requirements.txtでaudioop-ltsを用意済みだが、当面3.12を明示指定して固定する。
           python-version: "3.12"
           cache: pip
 
       - name: 依存インストール
+        if: steps.skip.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: 声エンジンのキャッシュ
-        uses: actions/cache@v4
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/cache@v6
         with:
           path: |
             .engine
             ~/.local/share/AivisSpeech-Engine
             ~/.cache/huggingface
-          key: tts-engine-v1-${{ hashFiles('scripts/start_engine.sh') }}
+          # バージョンをキーに含めることで、キャッシュ破棄時に「latest」へ勝手に
+          # ジャンプするのを防ぐ（scripts/start_engine.shのAIVIS_ENGINE_VERSIONと揃える）。
+          # .github/workflows/reading-eval.yml も同じキー文字列を使うこと。
+          key: tts-engine-1.2.0-${{ hashFiles('scripts/start_engine.sh') }}
 
       - name: 7z・ffmpegの存在を保証
+        if: steps.skip.outputs.skip != 'true'
         run: sudo apt-get update && sudo apt-get install -y p7zip-full ffmpeg
 
       - name: 声エンジン起動
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}   # gh release downloadに必要
         run: |
           ENGINE=$(python -c "import yaml;print(yaml.safe_load(open('config.yaml'))['tts']['engine'])")
           echo "engine=$ENGINE"
@@ -76,9 +133,18 @@ jobs:
         # site/ は gh-pages 由来なので、過去回のJSONには改名前のタイトルが残る。
         # config.yaml の episode_title_prefix を変えたとき、過去回も追随させる。
         # 変更が無ければ何もしない（冪等）。
+        if: steps.skip.outputs.skip != 'true'
         run: python tools/fix_episode_titles.py --apply
 
       - name: 収録（ニュース→台本→音声→配信ファイル生成）
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           REPO_NAME="${GITHUB_REPOSITORY#*/}"
           export SITE_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
@@ -88,9 +154,11 @@ jobs:
         # site/ は gh-pages をチェックアウトして作るため、main側の site/ に置いたファイルは
         # 残らない。Google OAuth の必須項目であるプライバシーポリシー・利用規約は
         # site_static/ に置き、デプロイ直前にここでコピーする。
+        if: steps.skip.outputs.skip != 'true'
         run: cp -a site_static/. site/
 
       - name: 配信（GitHub Pagesへデプロイ）
+        if: steps.skip.outputs.skip != 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
