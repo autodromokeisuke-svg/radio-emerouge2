@@ -82,19 +82,51 @@ def _load_dict_checks(fixtures_dir: Path) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _describe_exception(e: Exception) -> str:
+    """例外を、台本の行やURLを含まない短い説明に変換する（型名 + 分かればHTTPステータス）。
+
+    vv_compat.pyのengine.query()はaudio_query失敗時にRuntimeErrorで包み直すため、
+    元のrequests例外はe自身ではなく暗黙の例外チェーン（__cause__/__context__）に
+    入っている場合がある。両方を辿ってHTTPステータスを探す。
+    """
+    def _status_of(exc: Exception | None) -> int | None:
+        resp = getattr(exc, "response", None)
+        return getattr(resp, "status_code", None)
+
+    status = _status_of(e)
+    if status is None:
+        status = _status_of(e.__cause__) or _status_of(e.__context__)
+    if status is not None:
+        return f"{type(e).__name__}(status={status})"
+    return type(e).__name__
+
+
 def run_dict_checks(engine: Any, checks: list[dict[str, Any]], role: str = "eme") -> list[dict[str, Any]]:
     """dict_checks.jsonの各項目を実際にエンジンへ問い合わせ、読みに
     must_containが（長音表記ゆれを吸収した上で）含まれるかを確認する。
     LLM呼び出しは一切行わない（辞書登録だけで直る/壊れないかの確認なので）。
 
-    戻り値は各チェックに {"passed": bool, "reading": str} を足したリスト。
+    項目に "roles"（例: ["eme", "ruje"]）があれば話者ごとに実行し、結果を
+    話者別に分ける。無ければ従来どおり既定話者（role引数）のみで実行する。
+    1件のengine.query失敗（本番で実際に起きたaudio_queryの500など）が
+    全体を落とさないよう、項目ごとに例外を捕まえて passed=False として記録する
+    （エラー内容は例外の型とHTTPステータスのみ。台本本文やURLは含めない）。
+
+    戻り値は各チェックに {"role": str, "passed": bool, "reading": str, "error": str} を
+    足したリスト（"roles"指定時は同じチェック内容が話者数だけ複製される）。
     """
     results = []
     for check in checks:
-        q = engine.query(role, check["text"])
-        reading = extract_reading(q)
-        passed = kana_contains(reading, check["must_contain"])
-        results.append({**check, "passed": passed, "reading": reading})
+        roles = check.get("roles") or [role]
+        for r in roles:
+            try:
+                q = engine.query(r, check["text"])
+                reading = extract_reading(q)
+                passed = kana_contains(reading, check["must_contain"])
+                results.append({**check, "role": r, "passed": passed, "reading": reading, "error": ""})
+            except Exception as e:  # noqa: BLE001 - 1件の失敗で他の項目の検証を止めない
+                results.append({**check, "role": r, "passed": False, "reading": "",
+                                "error": _describe_exception(e)})
     return results
 
 
@@ -193,8 +225,12 @@ def _build_dict_checks_markdown(dict_results: list[dict[str, Any]]) -> str:
             if r["passed"]:
                 continue
             note = f"（{r['note']}）" if r.get("note") else ""
-            lines.append(f"- {note} 「{r['text']}」-> 「{r['reading']}」"
-                         f"（「{r['must_contain']}」を含まず）")
+            role = f"[{r['role']}] " if r.get("role") else ""
+            if r.get("error"):
+                lines.append(f"- {role}{note} 「{r['text']}」-> エラー: {r['error']}")
+            else:
+                lines.append(f"- {role}{note} 「{r['text']}」-> 「{r['reading']}」"
+                             f"（「{r['must_contain']}」を含まず）")
         lines.append("")
     return "\n".join(lines)
 

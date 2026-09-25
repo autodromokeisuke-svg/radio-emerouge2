@@ -71,5 +71,12 @@
   {"text": "力を緩めてね", "must_contain": "ユルメテ", "note": "緩すぎる collateral"},
   {"text": "量が多すぎると思う", "must_contain": "オオスギル", "note": "緩すぎる collateral"},
   {"text": "値段が高すぎると思う", "must_contain": "タカスギル", "note": "緩すぎる collateral"},
-  {"text": "お湯が熱すぎるよ", "must_contain": "アツスギル", "note": "緩すぎる collateral"}
+  {"text": "お湯が熱すぎるよ", "must_contain": "アツスギル", "note": "緩すぎる collateral"},
+
+  {"text": "そう、企業が大きなコストをかけてAIを入れたのに、使いっぱなしで改善のループを回せてないと、高いだけで成果が出ない「学習しない社員」状態になるって話なんだよ。", "must_contain": "ガクシュウシナイシャイン", "note": "repro-500", "roles": ["eme", "ruje"]},
+  {"text": "そう、企業が大きなコストをかけてAIを入れたのに、使いっぱなしで改善のループを回せてないと、", "must_contain": "コストヲカケテ", "note": "repro-500", "roles": ["eme", "ruje"]},
+  {"text": "高いだけで成果が出ない「学習しない社員」状態になるって話なんだよ。", "must_contain": "セイカガデナイ", "note": "repro-500", "roles": ["eme", "ruje"]},
+  {"text": "高いだけで成果が出ない学習しない社員状態になるって話なんだよ。", "must_contain": "セイカガデナイ", "note": "repro-500", "roles": ["eme", "ruje"]},
+  {"text": "「学習しない社員」状態", "must_contain": "ガクシュウシナイシャインジョウタイ", "note": "repro-500", "roles": ["eme", "ruje"]},
+  {"text": "使いっぱなしで改善のループを回せてない", "must_contain": "カイゼンノループ", "note": "repro-500", "roles": ["eme", "ruje"]}
 ]
