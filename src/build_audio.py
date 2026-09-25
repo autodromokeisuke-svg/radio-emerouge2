@@ -27,6 +27,13 @@ from .tts import get_engine
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 TARGET_DBFS = -16.0
 
+
+class _ReadingCheckQueryError(RuntimeError):
+    """読み検証フェーズの audio_query 問い合わせ失敗を、セリフ番号付きで
+    表す。メッセージには型名とセリフ番号だけを入れ、台本の行そのものは
+    含めない（synthesize()の警告ログでそのまま表示しても安全にするため）。
+    """
+
 # 音声合成エンジンが繰り返し誤読する語の固定置換（プロンプト指示だけでは
 # 再発したため保険として追加）。「重め/重い」は「じゅうめ/ちょう」等に
 # 誤読されるが、この番組の文脈では常に「おも」と読ませたいので安全に置換できる
@@ -499,7 +506,14 @@ def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
     queries: list[dict | None] = [None] * len(lines)
     pairs = []
     for i, ln in enumerate(lines):
-        q = engine.query(ln["speaker"], texts[i])
+        try:
+            q = engine.query(ln["speaker"], texts[i])
+        except Exception as e:  # noqa: BLE001
+            # 台本の行は含めない（下のRuntimeErrorのdocstring参照）。どのセリフで
+            # 失敗したかが分かれば十分で、次回同じ箇所で再現するかの判別に使う。
+            raise _ReadingCheckQueryError(
+                f"セリフ{i + 1}の読み確認クエリに失敗: {type(e).__name__}"
+            ) from e
         queries[i] = q
         pairs.append({"index": i + 1, "text": texts[i], "phrases": extract_phrases(q)})
 
@@ -575,6 +589,11 @@ def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
     if reading_check_model and getattr(engine, "supports_reading_check", False):
         try:
             queries = _run_reading_check(engine, lines, prepared_texts, reading_check_model)
+        except _ReadingCheckQueryError as e:
+            # このメッセージは台本の行を含まない（_ReadingCheckQueryErrorのdocstring参照）。
+            # セリフ番号が分かるので、次回同じ箇所で再現するかの判別に使える。
+            print(f"[warn] 読み検証フェーズに失敗。通常合成にフォールバックします: {e}")
+            queries = [None] * total
         except Exception as e:  # noqa: BLE001
             # type名だけを出す（エンジンのエラーメッセージにはリクエストURL＝
             # 台本の行そのものが含まれうるため、行全体をログに出さないため）

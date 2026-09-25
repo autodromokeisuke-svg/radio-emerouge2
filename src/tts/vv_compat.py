@@ -25,6 +25,22 @@ from .base import TTSEngine
 READING_DICT_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "reading_dict.yaml"
 
 
+def _describe_request_error(e: Exception) -> str:
+    """requestsの例外を、台本の行（audio_query等のtextパラメータ）を含まない
+    短い説明に変換する。
+
+    requests例外の str() にはリクエストURL（=クエリ文字列に台本の行が
+    そのまま入っている）が含まれることが多く、そのまま例外メッセージへ
+    埋め込むとログに台本の行が漏れる。ここではHTTPエラーならステータス
+    コードだけ、それ以外は例外の型名だけを返す。
+    """
+    resp = getattr(e, "response", None)
+    status = getattr(resp, "status_code", None)
+    if status is not None:
+        return f"{type(e).__name__}(status={status})"
+    return type(e).__name__
+
+
 class VoicevoxCompatTTS(TTSEngine):
     supports_reading_check = True
 
@@ -184,7 +200,7 @@ class VoicevoxCompatTTS(TTSEngine):
             except requests.RequestException as e:
                 last_err = e
                 time.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"audio_queryに失敗: {text[:30]}... ({last_err})")
+        raise RuntimeError(f"audio_queryに失敗: {text[:30]}... ({_describe_request_error(last_err)})")
 
     def synth_from_query(self, role: str, query_json: dict) -> AudioSegment:
         """取得済みのクエリJSONから synthesis を呼び、音声を返す。"""
@@ -201,7 +217,7 @@ class VoicevoxCompatTTS(TTSEngine):
             except requests.RequestException as e:
                 last_err = e
                 time.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"synthesisに失敗: ({last_err})")
+        raise RuntimeError(f"synthesisに失敗: ({_describe_request_error(last_err)})")
 
     def synth(self, role: str, text: str) -> AudioSegment:
         query_json = self.query(role, text)
