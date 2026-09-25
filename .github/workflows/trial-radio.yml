@@ -1,0 +1,110 @@
+name: trial-radio
+
+# 台本生成モデルを変えて試し放送を1本作るための手動実行専用ワークフロー。
+# daily-radio.ymlの手順を流用するが、配信（gh-pagesデプロイ）・外部アップロード
+# （Google Drive / YouTube / X投稿素材の公開）は一切行わない。生成物はartifactとして
+# 保存するのみ。ケイスケが聴いて判断するまで何も公開されない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "台本生成に使うモデル名（config.yamlのscript.modelを上書き）"
+        required: false
+        default: "claude-sonnet-5"
+
+permissions:
+  contents: read
+
+# 本番のdaily-radio（group: radio）と同じグループにして同時実行を避ける
+# （両方ともAivisSpeechエンジンやAPIキーを使うため、衝突させたくない）
+concurrency:
+  group: radio
+  cancel-in-progress: false
+
+jobs:
+  trial-broadcast:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: 過去エピソード取得（gh-pages。話題履歴の参照用。無ければスキップ可）
+        uses: actions/checkout@v7
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: site
+          persist-credentials: false
+
+      - name: siteの.gitを除去
+        run: rm -rf site/.git || true
+
+      - name: Python準備
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: 声エンジンのキャッシュ
+        uses: actions/cache@v6
+        with:
+          path: |
+            .engine
+            ~/.local/share/AivisSpeech-Engine
+            ~/.cache/huggingface
+          key: tts-engine-1.2.0-${{ hashFiles('scripts/start_engine.sh') }}
+
+      - name: 7z・ffmpegの存在を保証
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full ffmpeg
+
+      - name: 声エンジン起動
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ENGINE=$(python -c "import yaml;print(yaml.safe_load(open('config.yaml'))['tts']['engine'])")
+          echo "engine=$ENGINE"
+          bash scripts/start_engine.sh "$ENGINE"
+
+      - name: 収録（ニュース→台本→音声。配信・外部アップロードはしない）
+        # ANTHROPIC_API_KEYのみを渡す。GDRIVE_SERVICE_ACCOUNT_JSON / YOUTUBE_* は
+        # 意図的に渡さない（各アップロード関数はこれらの環境変数が無いと自動スキップする。
+        # src/upload_drive.py・src/upload_youtube.py参照）。加えてRADIO_DISABLE_UPLOADS=1で
+        # config.yaml側の設定に関わらずアップロードを止める二重の安全策を取る。
+        # RADIO_SCRIPT_MODELで台本生成モデルを上書きし、本日分配信済みでも早期スキップ
+        # されないようworkflow_dispatch実行にする（_should_skip_scheduled_runは
+        # schedule起動時のみ働く）。RADIO_DUMP_SCRIPTで台本一式をout/script.jsonへ書き出す。
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RADIO_SCRIPT_MODEL: ${{ github.event.inputs.model }}
+          RADIO_DISABLE_UPLOADS: "1"
+          RADIO_DUMP_SCRIPT: "1"
+        run: |
+          START_TS=$(date +%s)
+          python -m src.run_daily
+          END_TS=$(date +%s)
+          mkdir -p out
+          {
+            echo "model=${RADIO_SCRIPT_MODEL}"
+            echo "elapsed_seconds=$((END_TS - START_TS))"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "triggered_by=${GITHUB_ACTOR}"
+          } > out/trial_meta.txt
+          cat out/trial_meta.txt
+
+      - name: 生成物をartifactとして保存（公開はしない）
+        uses: actions/upload-artifact@v7
+        with:
+          name: trial-radio-${{ github.run_id }}
+          path: |
+            out/today.mp3
+            out/script.json
+            out/trial_meta.txt
+          retention-days: 7
+          if-no-files-found: warn

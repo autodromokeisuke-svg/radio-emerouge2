@@ -7,9 +7,15 @@ GitHub Actions から `python -m src.run_daily` で実行される。
   ANTHROPIC_API_KEY … 台本生成用
   SITE_BASE_URL     … 配信URL (例: https://<user>.github.io/<repo>)
                       未設定ならローカルテスト用のダミーURLを使う
+
+試し放送（公開しない検証実行）向けの任意の環境変数:
+  RADIO_SCRIPT_MODEL   … 台本生成モデルをconfig.yamlのscript.modelより優先して上書き
+  RADIO_DISABLE_UPLOADS… "1"ならGoogle Drive・YouTubeへのアップロードを強制的に止める
+  RADIO_DUMP_SCRIPT    … "1"なら生成した台本一式をout/script.jsonへ書き出す
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +51,27 @@ def _today_mp3_name(site: Path) -> str | None:
     return mp3_name if (site / "episodes" / mp3_name).exists() else None
 
 
+def _apply_script_model_override(cfg: dict) -> None:
+    """環境変数 RADIO_SCRIPT_MODEL が設定されていれば script.model を上書きする。
+
+    試し放送（台本生成モデルを変えた検証）用。未設定なら何もしない＝本番の挙動は不変。
+    ここでcfg["script"]["model"]自体を書き換えるため、write_script()への台本生成、
+    glossaryの話題安全性チェック、reading_check_modelのフォールバック
+    （cfg["script"]["model"]を直接参照している）にも一律で反映される。
+    """
+    override = os.environ.get("RADIO_SCRIPT_MODEL")
+    if override:
+        cfg["script"]["model"] = override
+
+
+def _uploads_disabled() -> bool:
+    """環境変数 RADIO_DISABLE_UPLOADS=1 なら、Google Drive・YouTubeへのアップロードを
+    config.yamlの設定に関わらず止める（試し放送用の保険。通常はSecrets自体を渡さない
+    運用で止めるが、二重の安全策としてこのフラグも用意する）。
+    """
+    return os.environ.get("RADIO_DISABLE_UPLOADS") == "1"
+
+
 def _should_skip_scheduled_run(site: Path) -> bool:
     """schedule起動（cron）で、かつ本日分が配信済みならTrueを返す。
 
@@ -66,6 +93,7 @@ def main() -> None:
         return
 
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+    _apply_script_model_override(cfg)
     show_cfg = cfg["show"]
     base_url = os.environ.get("SITE_BASE_URL", "http://localhost:8000").rstrip("/")
 
@@ -93,6 +121,15 @@ def main() -> None:
                           recent_terms=recent_terms, recent_news=recent_news,
                           show_cfg=show_cfg)
 
+    if os.environ.get("RADIO_DUMP_SCRIPT") == "1":
+        # 試し放送でモデルの出力を見比べられるよう、生成した台本一式を書き出す
+        # （本番では使わない。site/や配信物には含めず out/ のみに置く）
+        (ROOT / "out").mkdir(parents=True, exist_ok=True)
+        (ROOT / "out" / "script.json").write_text(
+            json.dumps({"script_model": script_cfg["model"], **script},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8")
+
     print("=== 3/4 収録 ===")
     # 読み検証だけ別モデルを使いたい場合はconfig.yamlに script.reading_check_model を
     # 足す（未設定なら従来どおり台本生成と同じモデル）。config.yaml自体は変更しない
@@ -117,7 +154,7 @@ def main() -> None:
                            else show_cfg["description"])[:400]
 
     drive_cfg = cfg.get("drive", {})
-    if drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):
+    if not _uploads_disabled() and drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):
         upload_to_drive(out_mp3, drive_cfg["folder_id"])
 
     print("=== 4/4 配信更新 ===")
@@ -147,7 +184,7 @@ def main() -> None:
     # YouTubeは従。動画の変換とアップロードに数分かかるため、主軸である
     # ポッドキャスト配信(update_site)を先に終わらせてから実行する
     youtube_cfg = cfg.get("youtube", {})
-    if youtube_cfg.get("enabled"):
+    if not _uploads_disabled() and youtube_cfg.get("enabled"):
         # YouTube側の説明欄にも音声モデルのクレジット表示（利用規約で必須）とフィードURLを添える
         yt_description = f"{episode_description}\n\n{show_cfg.get('credit', '')}\n\n{base_url}/feed.xml"
         video_id = upload_to_youtube(out_mp3, episode_title, yt_description, cfg)
