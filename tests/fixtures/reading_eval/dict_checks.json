@@ -93,6 +93,6 @@
   {"text": "開けっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "出しっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "つかいっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
-  {"text": "使いっ放し", "must_contain": "ポウシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "使いっ放し", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]}
 ]
