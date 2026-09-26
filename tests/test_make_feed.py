@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.make_feed import (
     _write_index,
     _episode_meta,
+    build_episode_description,
     load_recent_glossary_terms,
     record_glossary_term,
     load_recent_news_titles,
@@ -306,3 +307,59 @@ class TestPinnedEpisodes(unittest.TestCase):
                           "pinned_episodesに指定した回がepisodes_keepで削除された")
             self.assertNotIn(old1, remaining, "pin対象外の古い回が削除されていない")
             self.assertNotIn(old2, remaining, "pin対象外の古い回が削除されていない")
+
+
+class TestBuildEpisodeDescription(unittest.TestCase):
+    """番組説明文の組み立て（2026-09-27号の「… / Op」断片切れの再発防止）。"""
+
+    FALLBACK = "エメとルジェが毎朝AIニュースを届けるラジオ番組の説明文です。" * 5
+
+    def test_many_headlines_truncate_at_heading_boundary_with_hoka(self) -> None:
+        # 9/27相当: 9件の見出しで合計400字を超える
+        picked = [
+            "OpenAIが新しい推論モデルを発表し性能とコストの両面で大幅な改善を報告したと業界各紙が一斉に報道",
+            "Googleが検索結果にAI要約機能を全面展開しパブリッシャー側から著作権侵害を懸念する強い反発の声",
+            "Anthropicが企業向けエージェント機能を大幅に拡張し大手金融機関数社との協業を新たに発表したと明かす",
+            "Metaが新型ARグラスを公開し生成AIとの連携機能を披露するデモンストレーションを実施したと発表",
+            "日本政府がAI人材育成のための新しい補助金制度の詳細を公表し来年度予算案に反映させる方針を示す",
+            "米国でAI開発企業に対する新たな規制法案が議会に提出され業界団体が対応を検討していると報じられる",
+            "半導体大手が次世代AIチップの量産計画を前倒しすると発表し株価が大きく上昇したと市場関係者が話す",
+            "国内スタートアップがAI音声合成技術で大型資金調達に成功し海外展開を加速する方針を明らかにする",
+            "欧州委員会がAI著作権ルールの見直しに着手すると表明し関係団体からの意見公募を開始したと発表",
+        ]
+        result = build_episode_description(picked, self.FALLBACK, limit=400)
+
+        self.assertLessEqual(len(result), 400)
+        self.assertTrue(result.startswith("今日の話題: "))
+        self.assertTrue(result.endswith(" ほか"),
+                        "見出しを1件以上省略したら「ほか」で終わるはず")
+        # 見出しの途中で切れていない（「Op」のような断片が残らない）ことを確認
+        body = result[len("今日の話題: "):-len(" ほか")]
+        included_titles = body.split(" / ")
+        for title in included_titles:
+            self.assertIn(title, picked,
+                          "見出しが途中で切れて元のリストに存在しない断片になっている")
+
+    def test_short_list_matches_previous_behavior(self) -> None:
+        picked = ["OpenAIが新モデルを発表", "Googleが検索機能を刷新"]
+        result = build_episode_description(picked, self.FALLBACK, limit=400)
+        expected = "今日の話題: " + " / ".join(picked)
+        self.assertEqual(result, expected)
+        self.assertNotIn("ほか", result)
+
+    def test_empty_picked_uses_fallback_truncated(self) -> None:
+        result = build_episode_description([], self.FALLBACK, limit=400)
+        self.assertEqual(result, self.FALLBACK[:400])
+
+    def test_first_headline_alone_exceeds_limit(self) -> None:
+        long_title = "非常に長い見出し" * 60  # limitを大きく超える1件のみ
+        picked = [long_title, "短い見出し"]
+        result = build_episode_description(picked, self.FALLBACK, limit=400)
+        self.assertEqual(len(result), 400)
+        self.assertTrue(result.endswith("…"))
+        self.assertTrue(result.startswith("今日の話題: " + long_title[:10]))
+
+    def test_no_duplicate_headlines_kept(self) -> None:
+        picked = ["同じ見出し", "同じ見出し", "別の見出し"]
+        result = build_episode_description(picked, self.FALLBACK, limit=400)
+        self.assertEqual(result, "今日の話題: 同じ見出し / 別の見出し")

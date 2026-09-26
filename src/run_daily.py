@@ -26,6 +26,7 @@ from .build_audio import build, export_mp3
 from .collect_news import collect, filter_recent
 from .make_feed import (
     JST,
+    build_episode_description,
     build_episode_title,
     update_site,
     load_recent_glossary_terms,
@@ -150,8 +151,7 @@ def main() -> None:
     # （AIが日によって表記を変えたり日付を誤記したりする揺れを根絶するため）
     episode_title = build_episode_title(
         show_cfg.get("episode_title_prefix") or show_cfg["title"], now)
-    episode_description = ("今日の話題: " + " / ".join(picked) if picked
-                           else show_cfg["description"])[:400]
+    episode_description = build_episode_description(picked, show_cfg["description"])
 
     drive_cfg = cfg.get("drive", {})
     if not _uploads_disabled() and drive_cfg.get("upload_enabled") and drive_cfg.get("folder_id"):

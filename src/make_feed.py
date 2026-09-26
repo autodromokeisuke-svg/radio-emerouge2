@@ -38,6 +38,48 @@ def build_episode_title(show_title: str, dt: datetime) -> str:
     return f"{show_title} {dt.month}月{dt.day}日号（{dt.month}/{dt.day}）"
 
 
+def build_episode_description(picked: list[str], fallback: str, limit: int = 400) -> str:
+    """番組説明文を見出しリストから組み立てる。
+
+    見出しが多い日に単純に文字数で切ると「… / Op」のような断片が
+    末尾に残ってしまう（2026-09-27号で発生）ため、見出し単位で足していき、
+    limitを超える手前で止める。1件以上省略したら「 ほか」を付ける
+    （「ほか」を含めてlimit以内）。同一見出しの完全重複は順序を保ったまま除去する
+    （似た見出しの統合はしない）。pickedが空ならfallbackをlimitで切って返す。
+    """
+    if not picked:
+        return fallback[:limit]
+
+    seen: set[str] = set()
+    uniq = []
+    for title in picked:
+        if title not in seen:
+            seen.add(title)
+            uniq.append(title)
+
+    prefix = "今日の話題: "
+    suffix = " ほか"
+
+    # 1件目からlimitを超える場合は、その見出し自体をlimit-1文字で切って「…」
+    first_full = prefix + uniq[0]
+    if len(first_full) > limit:
+        return first_full[: limit - 1] + "…"
+
+    full = prefix + " / ".join(uniq)
+    if len(full) <= limit:
+        return full
+
+    # 全件は収まらない → 見出し単位で、「ほか」を付けてもlimit以内に収まる分だけ足す
+    included = [uniq[0]]
+    for title in uniq[1:]:
+        candidate_with_suffix = prefix + " / ".join(included + [title]) + suffix
+        if len(candidate_with_suffix) <= limit:
+            included.append(title)
+        else:
+            break
+    return prefix + " / ".join(included) + suffix
+
+
 _REQUIRED_META_KEYS = ("date", "pub", "title", "description", "file", "bytes")
 
 
