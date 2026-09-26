@@ -61,7 +61,7 @@ tts:
 # 台本生成（Claude API）
 # --------------------------------------------
 script:
-  model: "claude-sonnet-4-6"        # 節約したい時は "claude-haiku-4-5-20251001"
+  model: "claude-sonnet-5"          # 2026-09-26に4-6から切替（試し放送で確認済み）。節約したい時は "claude-haiku-4-5-20251001"
   max_news: 6                       # 1回で扱うニュース本数
   chars_per_minute: 320             # 日本語ラジオの想定読み上げ速度（文字/分）
   glossary_reuse_avoid_days: 30     # 「今日のひとこと用語」を再利用するまでの最低間隔（日数）
@@ -93,7 +93,7 @@ bgm:
 # Google Driveへの自動保存（任意。GDRIVE_SERVICE_ACCOUNT_JSON未設定なら自動スキップ）
 # --------------------------------------------
 drive:
-  upload_enabled: true
+  upload_enabled: false   # 2026-09-26停止（Service Accountに保存容量が無く毎回403だったため）
   folder_id: "1pVj5ewGTbeXQOBPFYAn1KQQNdVePfq19"
 
 # --------------------------------------------
