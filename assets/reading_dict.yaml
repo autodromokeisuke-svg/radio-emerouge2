@@ -148,3 +148,9 @@ words:
     # 位置を「緩すぎる」（ユ・ル・ス・ギ・ル、5拍）に当てはめるとaccent_type=4
     # （4拍目「ギ」の直後で核）になることを実機確認済み。0（平板）では
     # このアクセント核の位置と形が合わない。
+
+  - surface: "使いっぱなし"
+    pronunciation: "ツカイッパナシ"
+    accent_type: 0
+    word_type: "COMMON_NOUN"
+    # AivisSpeech 1.2.0 の audio_query がこの語で500を返す（2026-09-26本番でセリフ欠落、CIで再現）。辞書登録で回避できるか検証中

@@ -87,5 +87,12 @@
   {"text": "ループを回せてない", "must_contain": "ループヲマワセテナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
   {"text": "回せてない", "must_contain": "マワセテナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
   {"text": "回せていない", "must_contain": "マワセテイナイ", "note": "repro-500b", "roles": ["eme", "ruje"]},
-  {"text": "ループを回す", "must_contain": "ループヲマワス", "note": "repro-500b", "roles": ["eme", "ruje"]}
+  {"text": "ループを回す", "must_contain": "ループヲマワス", "note": "repro-500b", "roles": ["eme", "ruje"]},
+
+  {"text": "やりっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "開けっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "出しっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "つかいっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "使いっ放し", "must_contain": "ポウシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]}
 ]
