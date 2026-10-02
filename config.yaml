@@ -8,7 +8,7 @@ show:
   episode_title_prefix: "デイリーAIニュース"        # 各回のタイトルに使う短い名前（YouTube動画タイトルにもなる。未設定ならtitleを使う）
   author: "えめるーじぇ"
   description: "エメとルジェが毎朝お届けする、通勤のお供AIニュースラジオ。その日のAI・テクノロジーの話題を、ふたりの掛け合いで20分ほどにまとめています。"
-  minutes: 30            # 1回の目標尺（分）。慣れたら30に上げてOK（無料エンジンなら追加コストなし）
+  minutes: 35            # 1回の目標尺（分）。2026-10-03に30→35。sonnet-5は目標の約62%しか書かず約17.7分だったため、4.6時代の約20分に戻す狙い
   episodes_keep: 14      # 配信ページに残すエピソード数（古いものから自動削除）
   pinned_episodes: ["20260901"]  # ここに載せた日付(YYYYMMDD)はepisodes_keepの対象から除外し永久保存する（記念すべき初回放送）
   owner_email: "emerouge.kei@gmail.com"

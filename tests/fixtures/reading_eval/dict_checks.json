@@ -94,5 +94,10 @@
   {"text": "出しっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "つかいっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "使いっ放し", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
-  {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]}
+  {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+  {"text": "動画を編集する", "must_contain": "ヘンシュウ", "note": "編集 check", "roles": ["eme", "ruje"]},
+  {"text": "編集部の記事を読む", "must_contain": "ヘンシュウ", "note": "編集 check", "roles": ["eme", "ruje"]},
+  {"text": "編集長が話していた", "must_contain": "ヘンシュウ", "note": "編集 check", "roles": ["eme", "ruje"]},
+  {"text": "画像の編集機能が増えた", "must_contain": "ヘンシュウ", "note": "編集 check", "roles": ["eme", "ruje"]},
+  {"text": "編集者のかた", "must_contain": "ヘンシュウ", "note": "編集 check", "roles": ["eme", "ruje"]}
 ]
