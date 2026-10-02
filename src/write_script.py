@@ -569,7 +569,7 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     for attempt in range(_MAX_ATTEMPTS):
         resp = client.messages.create(
             model=script_cfg["model"],
-            max_tokens=20000,  # 目標35分(約1.2万字)＋思考分。非ストリーミングで安全な上限は約21,000
+            max_tokens=16000,
             system=system_blocks,
             messages=messages,
         )

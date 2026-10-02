@@ -848,7 +848,7 @@ class TestPromptSplitAndCache(unittest.TestCase):
             self.assertEqual(first_user["role"], "user")
             self.assertEqual(first_user["content"][-1]["cache_control"], {"type": "ephemeral"})
             self.assertEqual(_count_cache_controls(kw), 2)
-            self.assertEqual(kw["max_tokens"], 20000)
+            self.assertEqual(kw["max_tokens"], 16000)
 
     def test_retry_keeps_first_message_and_appends_plain_strings(self) -> None:
         recent = [{"date": "20260905", "term": "OCR"}]
