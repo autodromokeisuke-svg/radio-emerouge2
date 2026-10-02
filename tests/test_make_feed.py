@@ -1,16 +1,21 @@
 """glossary_history.json 周りの単体テスト（標準ライブラリ unittest のみ使用）。"""
 from __future__ import annotations
 
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.make_feed import (
+    _load_glossary_by_date,
     _write_index,
     _episode_meta,
     build_episode_description,
@@ -86,6 +91,112 @@ class TestGlossaryHistory(unittest.TestCase):
             self.assertFalse((site / "glossary_history.json").exists())
 
 
+class TestGlossaryHistoryAllPeriod(unittest.TestCase):
+    """用語履歴は無期限に保持し、既定では日数の窓を使わず全期間を返すこと。
+
+    「今日のひとこと」は公開開始(2026-09-01)以降の全期間で重複させない方針。
+    30日の窓だと9/1→10/1（30日）でフィジカルAIが窓から落ちて重複した（2026-10-01実発生）。
+    """
+
+    def _write(self, site: Path, entries: list[dict[str, str]]) -> None:
+        (site / "glossary_history.json").write_text(
+            json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+    def _old_and_new(self) -> tuple[str, str]:
+        now = datetime.now(JST)
+        return ((now - timedelta(days=200)).strftime("%Y%m%d"),
+                (now - timedelta(days=3)).strftime("%Y%m%d"))
+
+    def test_days_none_returns_all_period(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            old, new = self._old_and_new()
+            self._write(site, [{"date": old, "term": "古い用語"}, {"date": new, "term": "新しい用語"}])
+            self.assertEqual(load_recent_glossary_terms(site, days=None),
+                             [{"date": old, "term": "古い用語"}, {"date": new, "term": "新しい用語"}])
+            # days省略（既定）も全期間
+            self.assertEqual(len(load_recent_glossary_terms(site)), 2)
+
+    def test_days_zero_or_negative_returns_all_period(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            old, new = self._old_and_new()
+            self._write(site, [{"date": old, "term": "古い用語"}, {"date": new, "term": "新しい用語"}])
+            self.assertEqual(len(load_recent_glossary_terms(site, days=0)), 2)
+            self.assertEqual(len(load_recent_glossary_terms(site, days=-5)), 2)
+
+    def test_positive_days_still_uses_the_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            old, new = self._old_and_new()
+            self._write(site, [{"date": old, "term": "古い用語"}, {"date": new, "term": "新しい用語"}])
+            self.assertEqual(load_recent_glossary_terms(site, days=30),
+                             [{"date": new, "term": "新しい用語"}])
+            self.assertEqual(len(load_recent_glossary_terms(site, days=365)), 2)
+
+    def test_since_excludes_the_private_august_period_in_all_period_mode(self) -> None:
+        """全期間モードでも、公開開始日(since)より前（8月の非公開期間）は返さない。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write(site, [{"date": "20260801", "term": "非公開期間の用語"},
+                               {"date": "20260831", "term": "公開前日の用語"},
+                               {"date": "20260901", "term": "フィジカルAI"},
+                               {"date": "20260930", "term": "公開後の用語"}])
+            terms = load_recent_glossary_terms(site, days=None, since="20260901")
+            self.assertEqual([t["term"] for t in terms], ["フィジカルAI", "公開後の用語"])
+
+    def test_since_with_days_zero_equivalent_to_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write(site, [{"date": "20260801", "term": "A"}, {"date": "20260901", "term": "B"}])
+            self.assertEqual(load_recent_glossary_terms(site, days=0, since="20260901"),
+                             load_recent_glossary_terms(site, days=None, since="20260901"))
+
+    def test_invalid_date_entries_are_skipped_when_loading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write(site, [{"date": "bad", "term": "X"}, {"date": "20260901", "term": "Y"}])
+            self.assertEqual(load_recent_glossary_terms(site, days=None),
+                             [{"date": "20260901", "term": "Y"}])
+
+    def test_record_does_not_delete_entries_older_than_200_days(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            old, new = self._old_and_new()
+            self._write(site, [{"date": old, "term": "200日前の用語"}])
+            record_glossary_term(site, new, "今日の用語")
+            saved = json.loads((site / "glossary_history.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved, [{"date": old, "term": "200日前の用語"},
+                                     {"date": new, "term": "今日の用語"}])
+
+    def test_record_keeps_publish_start_entry_across_long_gaps(self) -> None:
+        """9/1分が90日後（11/30頃）に消えて重複判定が効かなくなる退行の防止。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write(site, [{"date": "20260901", "term": "フィジカルAI"}])
+            record_glossary_term(site, _recent_date_key(1), "別の用語")
+            terms = load_recent_glossary_terms(site, days=None, since="20260901")
+            self.assertIn("フィジカルAI", [t["term"] for t in terms])
+
+    def test_record_drops_invalid_dates_and_sorts_ascending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write(site, [{"date": "20260905", "term": "C"}, {"date": "oops", "term": "X"},
+                               {"date": "20260901", "term": "A"}])
+            record_glossary_term(site, "20260903", "B")
+            saved = json.loads((site / "glossary_history.json").read_text(encoding="utf-8"))
+            self.assertEqual([e["term"] for e in saved], ["A", "B", "C"])
+
+    def test_record_same_date_overwrites_even_for_old_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            old, _ = self._old_and_new()
+            record_glossary_term(site, old, "最初")
+            record_glossary_term(site, old, "上書き")
+            saved = json.loads((site / "glossary_history.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved, [{"date": old, "term": "上書き"}])
+
+
 class TestNewsHistory(unittest.TestCase):
     def test_record_then_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,6 +244,185 @@ class TestNewsHistory(unittest.TestCase):
             site = Path(tmp)
             news = load_recent_news_titles(site, days=7)
             self.assertEqual(news, [])
+
+
+class TestHistoryFilesAreWrittenAtomically(unittest.TestCase):
+    """履歴JSONは一時ファイル＋os.replaceで書く。書き込みの途中で落ちても、途中で切れた
+    不完全なJSONが残らない（残ると履歴が全部読めなくなり、重複判定が効かなくなる）。"""
+
+    ORIGINAL_GLOSSARY = [{"date": "20260901", "term": "フィジカルAI"}]
+    ORIGINAL_NEWS_DATE = _recent_date_key(3)
+
+    def _cases(self):
+        """(ファイル名, 元の中身, 更新を実行する関数) の組。"""
+        news_original = [{"date": self.ORIGINAL_NEWS_DATE, "title": "元のニュース", "link": ""}]
+        return [
+            ("glossary_history.json", self.ORIGINAL_GLOSSARY,
+             lambda site: record_glossary_term(site, "20260903", "新しい用語")),
+            ("news_history.json", news_original,
+             lambda site: record_used_news(site, _recent_date_key(1), [{"title": "新しいニュース", "link": ""}])),
+        ]
+
+    def test_crash_in_the_middle_of_writing_keeps_the_original_file(self) -> None:
+        original_write_text = Path.write_text
+
+        def crash_midway(self_path, data, *args, **kwargs):
+            original_write_text(self_path, data[: len(data) // 2], *args, **kwargs)  # 途中まで書いて
+            raise OSError("disk full")                                               # 落ちる
+
+        for name, original, update in self._cases():
+            with self.subTest(file=name), tempfile.TemporaryDirectory() as tmp:
+                site = Path(tmp)
+                (site / name).write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+                with patch.object(Path, "write_text", crash_midway):
+                    with self.assertRaises(OSError):
+                        update(site)
+                self.assertEqual(json.loads((site / name).read_text(encoding="utf-8")), original)
+                self.assertEqual(sorted(p.name for p in site.iterdir()), [name])  # 一時ファイルも残さない
+
+    def test_failure_of_the_final_replace_keeps_the_original_and_leaves_no_temp_file(self) -> None:
+        for name, original, update in self._cases():
+            with self.subTest(file=name), tempfile.TemporaryDirectory() as tmp:
+                site = Path(tmp)
+                (site / name).write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+                with patch("src.make_feed.os.replace", side_effect=OSError("locked")):
+                    with self.assertRaises(OSError):
+                        update(site)
+                self.assertEqual(json.loads((site / name).read_text(encoding="utf-8")), original)
+                self.assertEqual(sorted(p.name for p in site.iterdir()), [name])
+
+    def test_temp_file_is_in_the_same_directory_and_replaces_the_target(self) -> None:
+        for name, original, update in self._cases():
+            with self.subTest(file=name), tempfile.TemporaryDirectory() as tmp:
+                site = Path(tmp)
+                (site / name).write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+                calls = []
+                real_replace = os.replace   # patchはosモジュール自体の属性を差し替えるので、先に本物を控える
+
+                def recording_replace(src, dst):
+                    calls.append((Path(src), Path(dst)))
+                    return real_replace(src, dst)
+
+                with patch("src.make_feed.os.replace", side_effect=recording_replace):
+                    update(site)
+                self.assertEqual(len(calls), 1)
+                src, dst = calls[0]
+                self.assertEqual(dst, site / name)
+                self.assertEqual(src.parent, dst.parent)   # 同じディレクトリ（別ドライブ等でのreplace失敗を避ける）
+                self.assertNotEqual(src, dst)
+                self.assertEqual(sorted(p.name for p in site.iterdir()), [name])   # 成功後は一時ファイルが残らない
+                self.assertGreater(len(json.loads((site / name).read_text(encoding="utf-8"))), len(original))
+
+
+class TestBrokenHistoryFileIsRewrittenWithWarning(unittest.TestCase):
+    """既存の履歴JSONが壊れていて読めないときは、警告を出して新しいファイルとして書き直す
+    （空リストから作り直す挙動は維持）。ファイルが無い（初回）ときは警告を出さない。"""
+
+    def _record(self, name: str):
+        if name == "glossary_history.json":
+            return lambda site: record_glossary_term(site, "20260903", "新しい用語")
+        return lambda site: record_used_news(site, _recent_date_key(1), [{"title": "新しいニュース", "link": ""}])
+
+    def _run(self, name: str, content: bytes | None) -> tuple[list[str], list]:
+        site_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(site_dir.cleanup)
+        site = Path(site_dir.name)
+        if content is not None:
+            (site / name).write_bytes(content)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self._record(name)(site)
+        warns = [ln for ln in buf.getvalue().splitlines() if ln.startswith("[warn]")]
+        return warns, json.loads((site / name).read_text(encoding="utf-8"))
+
+    def test_broken_files_are_rewritten_with_one_warning(self) -> None:
+        broken = {"壊れたJSON": b"{not valid json", "途中で切れたJSON": b'[{"date": "20260901", "te',
+                  "空ファイル": b"", "リストでないJSON": b'{"date": "20260901"}',
+                  "nullのJSON": b"null", "不正な文字コード": b"\xff\xfe\x00[]"}
+        for name in ["glossary_history.json", "news_history.json"]:
+            for label, content in broken.items():
+                with self.subTest(file=name, broken=label):
+                    warns, saved = self._run(name, content)
+                    self.assertEqual(warns, [f"[warn] {name} が壊れていたため、新しいファイルとして書き直します"])
+                    self.assertEqual(len(saved), 1)   # 空リストから作り直し＝今回の1件だけ
+
+    def test_missing_or_valid_files_do_not_warn(self) -> None:
+        for name in ["glossary_history.json", "news_history.json"]:
+            with self.subTest(file=name, state="missing"):
+                warns, saved = self._run(name, None)
+                self.assertEqual(warns, [])
+                self.assertEqual(len(saved), 1)
+            with self.subTest(file=name, state="valid"):
+                warns, saved = self._run(name, b"[]")
+                self.assertEqual(warns, [])
+                self.assertEqual(len(saved), 1)
+
+
+class TestHistoryEntriesWithNonStringDate(unittest.TestCase):
+    """エントリの date が文字列でない（数値・None・リスト等）ときは、TypeErrorで落ちず、
+    そのエントリを読み飛ばす。"""
+
+    BAD_DATES = [20260901, None, ["20260901"], {"d": 1}, 1.5, True]
+
+    def _dump(self, site: Path, name: str, valid: dict) -> None:
+        entries = [dict(valid, date=bad) for bad in self.BAD_DATES] + [valid]
+        (site / name).write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+    def test_glossary_loader_skips_them(self) -> None:
+        valid = {"date": _recent_date_key(2), "term": "有効な用語"}
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._dump(site, "glossary_history.json", valid)
+            for kwargs in [{}, {"days": None}, {"days": 30}, {"since": "20260101"},
+                           {"days": 30, "since": "20260101"}]:
+                with self.subTest(kwargs=kwargs):
+                    self.assertEqual(load_recent_glossary_terms(site, **kwargs), [valid])
+
+    def test_news_loader_skips_them(self) -> None:
+        valid = {"date": _recent_date_key(2), "title": "有効なニュース", "link": ""}
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._dump(site, "news_history.json", valid)
+            for kwargs in [{}, {"days": 30}, {"since": "20260101"}]:
+                with self.subTest(kwargs=kwargs):
+                    self.assertEqual(load_recent_news_titles(site, **kwargs), [valid])
+
+    def test_glossary_by_date_for_the_page_skips_them(self) -> None:
+        valid = {"date": "20260901", "term": "有効な用語"}
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._dump(site, "glossary_history.json", valid)
+            self.assertEqual(_load_glossary_by_date(site), {"20260901": "有効な用語"})
+
+    def test_record_glossary_term_drops_them_and_keeps_the_rest(self) -> None:
+        valid = {"date": "20260901", "term": "有効な用語"}
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._dump(site, "glossary_history.json", valid)
+            record_glossary_term(site, "20260903", "今日の用語")
+            saved = json.loads((site / "glossary_history.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved, [valid, {"date": "20260903", "term": "今日の用語"}])
+
+    def test_record_used_news_drops_them_and_keeps_the_rest(self) -> None:
+        valid = {"date": _recent_date_key(5), "title": "有効なニュース", "link": ""}
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._dump(site, "news_history.json", valid)
+            today = _recent_date_key(1)
+            record_used_news(site, today, [{"title": "今日のニュース", "link": ""}])
+            saved = json.loads((site / "news_history.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved, [valid, {"date": today, "title": "今日のニュース", "link": ""}])
+
+    def test_non_dict_entries_are_still_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "glossary_history.json").write_text(
+                json.dumps(["文字列", None, 3, [], {"date": "20260901", "term": "有効"}], ensure_ascii=False),
+                encoding="utf-8")
+            self.assertEqual(load_recent_glossary_terms(site), [{"date": "20260901", "term": "有効"}])
+            record_glossary_term(site, "20260902", "追加")
+            saved = json.loads((site / "glossary_history.json").read_text(encoding="utf-8"))
+            self.assertEqual([e["term"] for e in saved], ["有効", "追加"])
 
 
 class TestEpisodeMetaRobustness(unittest.TestCase):
@@ -363,3 +653,159 @@ class TestBuildEpisodeDescription(unittest.TestCase):
         picked = ["同じ見出し", "同じ見出し", "別の見出し"]
         result = build_episode_description(picked, self.FALLBACK, limit=400)
         self.assertEqual(result, "今日の話題: 同じ見出し / 別の見出し")
+
+
+def _freeze_make_feed_now(fixed: datetime):
+    """src.make_feed 内の datetime.now(tz) を fixed（JSTのaware）に固定するパッチ。"""
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+    return patch("src.make_feed.datetime", _Frozen)
+
+
+class TestHistoryWindowIncludesExactlyNDaysAgo(unittest.TestCase):
+    """日数の窓は日付（暦日）単位で比較し、ちょうどN日前の当日分を含む（N+1日前は除外）。
+
+    以前は 00:00 に正規化した日付と「現在時刻 - N日」を比較していたため、N日前の当日分が
+    必ず落ち、実効N-1日になっていた（プロンプトの「直近14日」より1日短かった）。
+    """
+
+    TODAY = datetime(2026, 10, 5, tzinfo=JST)
+    # 時刻によらず同じ結果になること（00:07 / 正午 / 23:59）
+    CLOCKS = [(0, 7), (12, 0), (23, 59)]
+
+    def _key(self, days_ago: int) -> str:
+        return (self.TODAY - timedelta(days=days_ago)).strftime("%Y%m%d")
+
+    def _at(self, hour: int, minute: int):
+        return _freeze_make_feed_now(self.TODAY.replace(hour=hour, minute=minute))
+
+    def test_news_includes_exactly_n_days_ago_and_excludes_n_plus_1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "news_history.json").write_text(json.dumps(
+                [{"date": self._key(n), "title": f"{n}日前", "link": ""} for n in range(0, 17)],
+                ensure_ascii=False), encoding="utf-8")
+            for hour, minute in self.CLOCKS:
+                for days in (1, 7, 14):
+                    with self.subTest(clock=f"{hour:02d}:{minute:02d}", days=days), \
+                         self._at(hour, minute):
+                        got = [e["title"] for e in load_recent_news_titles(site, days=days)]
+                        self.assertEqual(got, [f"{n}日前" for n in range(0, days + 1)])
+                        self.assertIn(f"{days}日前", got)
+                        self.assertNotIn(f"{days + 1}日前", got)
+
+    def test_glossary_includes_exactly_n_days_ago_and_excludes_n_plus_1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "glossary_history.json").write_text(json.dumps(
+                [{"date": self._key(n), "term": f"{n}日前"} for n in range(0, 17)],
+                ensure_ascii=False), encoding="utf-8")
+            for hour, minute in self.CLOCKS:
+                for days in (1, 7, 14):
+                    with self.subTest(clock=f"{hour:02d}:{minute:02d}", days=days), \
+                         self._at(hour, minute):
+                        got = [e["term"] for e in load_recent_glossary_terms(site, days=days)]
+                        self.assertEqual(got, [f"{n}日前" for n in range(0, days + 1)])
+                        self.assertIn(f"{days}日前", got)
+                        self.assertNotIn(f"{days + 1}日前", got)
+
+    def test_glossary_without_days_is_still_all_period(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "glossary_history.json").write_text(json.dumps(
+                [{"date": self._key(n), "term": f"{n}日前"} for n in (0, 14, 15, 300)],
+                ensure_ascii=False), encoding="utf-8")
+            with self._at(12, 0):
+                self.assertEqual(len(load_recent_glossary_terms(site, days=None)), 4)
+                self.assertEqual(len(load_recent_glossary_terms(site, days=0)), 4)
+
+    def test_record_used_news_still_prunes_at_30_days(self) -> None:
+        """保存側のプルーニング（_NEWS_KEEP_DAYS=30）は従来どおり（今回の変更対象外）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "news_history.json").write_text(json.dumps(
+                [{"date": self._key(n), "title": f"{n}日前", "link": ""} for n in (29, 30, 31)],
+                ensure_ascii=False), encoding="utf-8")
+            with self._at(12, 0):
+                record_used_news(site, self._key(0), [{"title": "今日", "link": ""}])
+            saved = json.loads((site / "news_history.json").read_text(encoding="utf-8"))
+            titles = {e["title"] for e in saved}
+            self.assertIn("今日", titles)
+            self.assertIn("29日前", titles)
+            self.assertNotIn("31日前", titles)   # 30日前の境界は変更対象外のため検証しない
+
+
+class TestHistoryFilesWithBomAndBadEncoding(unittest.TestCase):
+    """履歴JSONの読み込みの耐性。BOM付き（メモ帳等で保存し直された）でも正しく読め、
+    cp932等で保存された不正なバイト列でも例外を投げない。書き込みは常にBOMなしUTF-8。"""
+
+    BOM = b"\xef\xbb\xbf"
+
+    def _write_bom(self, site: Path, name: str, entries: list) -> None:
+        (site / name).write_bytes(self.BOM + json.dumps(entries, ensure_ascii=False).encode("utf-8"))
+
+    def test_loaders_read_bom_prefixed_history(self) -> None:
+        g = [{"date": "20260901", "term": "フィジカルAI"}]
+        n = [{"date": _recent_date_key(2), "title": "BOM付きニュース", "link": ""}]
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write_bom(site, "glossary_history.json", g)
+            self._write_bom(site, "news_history.json", n)
+            self.assertEqual(load_recent_glossary_terms(site), g)
+            self.assertEqual(load_recent_glossary_terms(site, days=None, since="20260901"), g)
+            self.assertEqual(_load_glossary_by_date(site), {"20260901": "フィジカルAI"})
+            self.assertEqual(load_recent_news_titles(site, days=7), n)
+
+    def test_record_keeps_existing_entries_of_bom_prefixed_history_and_writes_without_bom(self) -> None:
+        g = [{"date": "20260901", "term": "フィジカルAI"}]
+        n_date = _recent_date_key(3)
+        n = [{"date": n_date, "title": "BOM付きニュース", "link": ""}]
+        today = _recent_date_key(1)
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            self._write_bom(site, "glossary_history.json", g)
+            self._write_bom(site, "news_history.json", n)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                record_glossary_term(site, "20260903", "新しい用語")
+                record_used_news(site, today, [{"title": "今日のニュース", "link": ""}])
+            self.assertNotIn("[warn]", buf.getvalue())   # 壊れた扱い（書き直し）になっていない
+            for name in ["glossary_history.json", "news_history.json"]:
+                self.assertFalse((site / name).read_bytes().startswith(self.BOM), name)
+            self.assertEqual(
+                json.loads((site / "glossary_history.json").read_text(encoding="utf-8")),
+                g + [{"date": "20260903", "term": "新しい用語"}])
+            self.assertEqual(
+                json.loads((site / "news_history.json").read_text(encoding="utf-8")),
+                n + [{"date": today, "title": "今日のニュース", "link": ""}])
+
+    def test_cp932_bytes_do_not_raise_in_loaders(self) -> None:
+        cp932 = json.dumps([{"date": "20260901", "term": "フィジカルAI"}],
+                           ensure_ascii=False).encode("cp932")
+        with self.assertRaises(UnicodeDecodeError):   # 前提: これはUTF-8として読めない
+            cp932.decode("utf-8-sig")
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "glossary_history.json").write_bytes(cp932)
+            (site / "news_history.json").write_bytes(cp932)
+            self.assertEqual(load_recent_glossary_terms(site), [])
+            self.assertEqual(load_recent_glossary_terms(site, days=30), [])
+            self.assertEqual(_load_glossary_by_date(site), {})
+            self.assertEqual(load_recent_news_titles(site, days=7), [])
+
+    def test_cp932_bytes_do_not_raise_in_record(self) -> None:
+        cp932 = json.dumps([{"date": "20260901", "term": "フィジカルAI"}],
+                           ensure_ascii=False).encode("cp932")
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / "glossary_history.json").write_bytes(cp932)
+            (site / "news_history.json").write_bytes(cp932)
+            with redirect_stdout(io.StringIO()):
+                record_glossary_term(site, "20260903", "新しい用語")
+                record_used_news(site, _recent_date_key(1), [{"title": "今日", "link": ""}])
+            self.assertEqual(
+                json.loads((site / "glossary_history.json").read_text(encoding="utf-8")),
+                [{"date": "20260903", "term": "新しい用語"}])
+            self.assertEqual(len(json.loads((site / "news_history.json").read_text(encoding="utf-8"))), 1)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -86,6 +87,28 @@ def _should_skip_scheduled_run(site: Path) -> bool:
     return _today_mp3_name(site) is not None
 
 
+def _validated_publish_from(show_cfg: dict) -> str:
+    """show.publish_from を検証して返す。空・未設定なら ""（＝制限なし）。
+
+    YYYYMMDD（8桁の半角数字で、実在する日付）ならそのまま返す。それ以外
+    （例: "2026-09-01"）は ValueError にして放送を始める前に止める（fail-fast）。
+    履歴の絞り込みは日付の文字列比較で行うため、形式が違うと比較が狂い、
+    非公開の試験運用期間（2026年8月）の放送履歴が台本生成AIへ渡ってしまうため。
+    """
+    raw = show_cfg.get("publish_from", "")
+    if not raw:
+        return ""
+    value = str(raw)
+    if re.fullmatch(r"[0-9]{8}", value):
+        try:
+            datetime.strptime(value, "%Y%m%d")
+            return value
+        except ValueError:
+            pass
+    raise ValueError("show.publish_from は YYYYMMDD 形式で指定してください"
+                     f"（例: 20260901）。現在値: {raw!r}")
+
+
 def main() -> None:
     site = ROOT / "site"
     if _should_skip_scheduled_run(site):
@@ -96,13 +119,14 @@ def main() -> None:
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
     _apply_script_model_override(cfg)
     show_cfg = cfg["show"]
+    # 参照可能な放送履歴は公開日以降のみ（非公開の試験運用期間へ言及させないため）。
+    # 形式が不正なら、ここ（ニュース収集の前）で止める
+    publish_from = _validated_publish_from(show_cfg)
     base_url = os.environ.get("SITE_BASE_URL", "http://localhost:8000").rstrip("/")
 
     print("=== 1/4 ニュース収集 ===")
     news = collect(cfg["news_feeds"], cfg.get("keyword_filter", []))
-    news_days = int(cfg["script"].get("news_reuse_avoid_days", 7))
-    # 参照可能な放送履歴は公開日以降のみ（非公開の試験運用期間へ言及させないため）
-    publish_from = str(show_cfg.get("publish_from", "") or "")
+    news_days = int(cfg["script"].get("news_reuse_avoid_days", 14))
     recent_news = load_recent_news_titles(ROOT / "site", days=news_days,
                                           since=publish_from)
     news = filter_recent(news, recent_news)
@@ -110,14 +134,17 @@ def main() -> None:
     print("=== 2/4 台本生成 ===")
     script_cfg = dict(cfg["script"])
     script_cfg["chars_per_minute"] = cfg["script"].get("chars_per_minute", 320)
-    glossary_days = int(cfg["script"].get("glossary_reuse_avoid_days", 30))
-    recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days,
+    # 0（または未設定）= 日数の窓を使わず、公開開始日(publish_from)以降の全期間と
+    # 突き合わせる。正の整数ならその日数以内だけ
+    glossary_days = int(cfg["script"].get("glossary_reuse_avoid_days", 0) or 0)
+    recent_terms = load_recent_glossary_terms(ROOT / "site", days=glossary_days or None,
                                               since=publish_from)
     # 台本生成AIへ渡す放送履歴の範囲を毎回ログに残す。非公開の試験運用期間へ
     # 言及してしまった2026-09-03の事故を再発させないための日々の証跡
     # （write_script側の再フィルタは、ここで既に除外済みだと無言で通るため）
+    terms_scope = f"直近{glossary_days}日" if glossary_days > 0 else "全期間"
     print(f"[ok] 参照する放送履歴: 公開開始日={publish_from or '(制限なし)'} / "
-          f"ニュース{len(recent_news)}件・用語{len(recent_terms)}件")
+          f"ニュース{len(recent_news)}件・用語{len(recent_terms)}件({terms_scope})")
     script = write_script(news, script_cfg, minutes=int(show_cfg["minutes"]),
                           recent_terms=recent_terms, recent_news=recent_news,
                           show_cfg=show_cfg)

@@ -1,0 +1,52 @@
+# 用語の英語名・略称・カタカナ表記の揺れを同一視するための辞書。重複判定にのみ使う。
+#
+# 「今日のひとこと」が公開開始以降の放送で使った用語と同じか判定するとき
+# （src/glossary_terms.py の find_duplicate）に、同じグループの表記を同じ用語として扱う。
+# 台本生成AIへ渡す使用済み用語リストにも「別表記」として添える。番組の中身
+# （台本の文章・口調）には一切影響しない。
+#
+# 書式: groups の下に、同じ用語の別表記を1グループ1行で並べる。各グループの先頭を
+# 代表表記とする。比較は正規化（全角/半角・大文字小文字・ひらがな/カタカナ・中黒や
+# スペースなどの記号・「エーアイ」と「AI」の違いを無視）してから行うので、そうした
+# 違いだけの表記は書かなくてよい。1つの語が複数グループに現れた場合は和集合として扱う。
+groups:
+  - [フィジカルAI, physical AI, フィジカルエーアイ, 身体性AI]
+  - [シャドーAI, shadow AI, シャドウAI, シャドーエーアイ]
+  - [ソブリンAI, sovereign AI, ソブリンエーアイ, 主権AI]
+  - [AIガバナンス, AI governance, エーアイガバナンス]
+  - [AIエージェント, AI agent, AI agents, エーアイエージェント]
+  - [マルチエージェント, multi-agent, multiagent, マルチエージェントシステム]
+  - [マルチモーダル, multimodal, マルチモーダルAI]
+  - [ハルシネーション, hallucination, 幻覚]
+  - [ファインチューン, ファインチューニング, fine-tuning, fine tuning, finetuning]
+  - [ハーネス, harness, エージェントハーネス]
+  - [ディープフェイク, deepfake, deep fake]
+  - [オープンウェイトAI, open-weight AI, open weight, オープンウェイト]
+  - [ミスアライメント, misalignment]
+  - [キルスイッチ, kill switch]
+  - [ヒューマン・イン・ザ・ループ, human-in-the-loop, HITL, ヒューマンインザループ]
+  - [モデル蒸留, 蒸留, distillation, model distillation, 知識蒸留]
+  - [トークン, token, tokens]
+  - [LLM, 大規模言語モデル, エルエルエム, large language model]
+  - [AGI, 汎用人工知能, エージーアイ]
+  - [ハイパースケーラー, hyperscaler]
+  - [フロンティアAI, frontier AI, フロンティアモデル]
+  - [ロックイン, lock-in, ベンダーロックイン]
+  - [オープンモデル, open model]
+  - [ハギングフェイス, Hugging Face, HuggingFace]
+  - [アンソロピック, Anthropic]
+  - [電子透かし, ウォーターマーク, watermark, 電子すかし]
+  - [AIウォッシング, AI washing]
+  - [RSI, 再帰的自己改善, recursive self-improvement]
+  - [ユニコーン, unicorn, ユニコーン企業]
+  - [オートモード, auto mode]
+  - [AI創薬, AI drug discovery]
+  - [ローカルAIエージェント, local AI agent]
+  - [セカンドオピニオン, second opinion]
+  - [脆弱性, vulnerability, ぜい弱性]
+  - [収穫逓減, diminishing returns, 収穫逓減の法則]
+  - [内製開発, 内製化, in-house development]
+  - [AI伝道師, AIエバンジェリスト, AI evangelist]
+  - [Sakana Fugu, サカナフグ]
+  - [コンプライオアエクスプレイン, comply or explain]
+  - [グランドハンドリング, ground handling]

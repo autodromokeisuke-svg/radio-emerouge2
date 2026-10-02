@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -114,40 +115,87 @@ def _episode_meta(site: Path) -> list[dict[str, Any]]:
     return sorted(metas, key=lambda m: m["date"])  # 古い→新しい
 
 
-_GLOSSARY_KEEP_DAYS = 90
+# ニュース履歴（news_history.json）の保存日数。record_used_news が保存時に、これより
+# 古いエントリを削除する。用語履歴（glossary_history.json）は無期限なので対象外
+# （理由は record_glossary_term を参照）。
 _NEWS_KEEP_DAYS = 30
 
 
-def load_recent_glossary_terms(site: Path, days: int = 30,
-                               since: str = "") -> list[dict[str, str]]:
-    """site/glossary_history.json から、直近days日以内に使った用語一覧を返す。
+def _read_history_for_update(path: Path) -> list[Any]:
+    """履歴JSON（glossary_history.json / news_history.json）を、追記・更新のために読む。
 
+    ファイルが無ければ（初回）空リスト。あっても壊れていて読めない（JSONとして不正・
+    文字コード不正・リストでない）ときは警告を出して空リスト＝新しいファイルとして
+    書き直す。
+    """
+    try:
+        # utf-8-sig: BOM付きで保存し直されたファイルも読める（BOMなしなら通常のUTF-8）
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):   # JSONDecodeError・UnicodeDecodeError は ValueError
+        entries = None
+    if not isinstance(entries, list):
+        print(f"[warn] {path.name} が壊れていたため、新しいファイルとして書き直します")
+        return []
+    return entries
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    """JSONを一時ファイル（同じディレクトリ）に書いてから os.replace で置き換える。
+
+    書き込みの途中で落ちても、途中で切れた不完全なJSONが本来のファイルに残らない
+    （残ると履歴が全部読めなくなり、重複判定が効かなくなる）。
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def load_recent_glossary_terms(site: Path, days: int | None = None,
+                               since: str = "") -> list[dict[str, str]]:
+    """site/glossary_history.json から、使った用語一覧を返す。
+
+    days が None または 0 以下のときは日数の窓を使わず、全期間の用語を返す
+    （「公開開始以降の全期間で重複させない」ための既定の使い方）。
+    days > 0 のときは、直近days日以内に使った用語だけを返す。日付（暦日）単位の比較で、
+    ちょうどdays日前の当日分は含む（days=14なら14日前の分まで、15日前は除外）。
     since（YYYYMMDD）を渡すと、それより前の日付を除外する。非公開の試験運用期間の
     放送内容を台本生成AIに見せると、リスナーが知らない放送へ言及してしまうため
     （詳細は write_script._drop_before_publish のコメント）。
-    ファイルが無い/壊れている場合は空リストを返す（例外を投げない）。
+    ファイルが無い/壊れている（文字コード不正・BOM付きは読める）場合は空リストを返す
+    （例外を投げない）。
     """
     path = site / "glossary_history.json"
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):   # JSONDecodeError・UnicodeDecodeError は ValueError
         return []
     if not isinstance(entries, list):
         return []
-    cutoff = datetime.now(JST) - timedelta(days=days)
+    cutoff = (datetime.now(JST).date() - timedelta(days=days)) if days and days > 0 else None
     result = []
     for e in entries:
         if not isinstance(e, dict):
             continue
         date = e.get("date", "")
         term = e.get("term", "")
+        if not isinstance(date, str):
+            continue
         if since and date < since:
             continue
         try:
-            dt = datetime.strptime(date, "%Y%m%d").replace(tzinfo=JST)
+            entry_date = datetime.strptime(date, "%Y%m%d").date()
         except ValueError:
             continue
-        if dt >= cutoff:
+        if cutoff is None or entry_date >= cutoff:
             result.append({"date": date, "term": term})
     return result
 
@@ -160,8 +208,8 @@ def _load_glossary_by_date(site: Path) -> dict[str, str]:
     """
     path = site / "glossary_history.json"
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):   # JSONDecodeError・UnicodeDecodeError は ValueError
         return {}
     if not isinstance(entries, list):
         return {}
@@ -171,6 +219,8 @@ def _load_glossary_by_date(site: Path) -> dict[str, str]:
             continue
         date = e.get("date", "")
         term = e.get("term", "")
+        if not isinstance(date, str):
+            continue
         if date and term:
             result[date] = term
     return result
@@ -181,33 +231,32 @@ def record_glossary_term(site: Path, date_key: str, term: str) -> None:
 
     term が空文字/Noneなら何もしない。
     同じdate_keyの既存エントリがあれば上書きする（同日再実行時に重複させない）。
-    保存後、90日より古いエントリは削除してファイルサイズを抑える。
+    履歴は無期限に保持する（古いエントリは削除しない）。「今日のひとこと」は公開開始
+    以降の全期間で重複させない方針のため、古い履歴を消すと重複判定が効かなくなる
+    （一時は90日で削除していたが、9/1分が11/30頃に消えて再発しうるので廃止）。
+    日付が不正なエントリのみ落とし、日付の昇順に並べて保存する。
     """
     if not term:
         return
     path = site / "glossary_history.json"
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(entries, list):
-            entries = []
-    except (OSError, json.JSONDecodeError):
-        entries = []
+    entries = _read_history_for_update(path)
 
     entries = [e for e in entries if isinstance(e, dict) and e.get("date") != date_key]
     entries.append({"date": date_key, "term": term})
 
-    cutoff = datetime.now(JST) - timedelta(days=_GLOSSARY_KEEP_DAYS)
     kept = []
     for e in entries:
+        date = e.get("date", "")
+        if not isinstance(date, str):
+            continue
         try:
-            dt = datetime.strptime(e.get("date", ""), "%Y%m%d").replace(tzinfo=JST)
+            datetime.strptime(date, "%Y%m%d")
         except ValueError:
             continue
-        if dt >= cutoff:
-            kept.append(e)
+        kept.append(e)
     kept.sort(key=lambda e: e["date"])
 
-    path.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
+    _write_json_atomic(path, kept)
 
 
 def load_recent_news_titles(site: Path, days: int = 7,
@@ -215,18 +264,21 @@ def load_recent_news_titles(site: Path, days: int = 7,
     """site/news_history.json から、直近days日以内に使ったニュース一覧を返す。
 
     各要素は {"date": "20260711", "title": str, "link": str} の形。
+    日付（暦日）単位の比較で、ちょうどdays日前の当日分は含む（days=14なら14日前の分
+    まで、15日前は除外）。
     since（YYYYMMDD）を渡すと、それより前の日付を除外する。理由は
     load_recent_glossary_terms と同じ。
-    ファイルが無い/壊れている場合は空リストを返す（例外を投げない）。
+    ファイルが無い/壊れている（文字コード不正・BOM付きは読める）場合は空リストを返す
+    （例外を投げない）。
     """
     path = site / "news_history.json"
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):   # JSONDecodeError・UnicodeDecodeError は ValueError
         return []
     if not isinstance(entries, list):
         return []
-    cutoff = datetime.now(JST) - timedelta(days=days)
+    cutoff = datetime.now(JST).date() - timedelta(days=days)
     result = []
     for e in entries:
         if not isinstance(e, dict):
@@ -234,13 +286,15 @@ def load_recent_news_titles(site: Path, days: int = 7,
         date = e.get("date", "")
         title = e.get("title", "")
         link = e.get("link", "")
+        if not isinstance(date, str):
+            continue
         if since and date < since:
             continue
         try:
-            dt = datetime.strptime(date, "%Y%m%d").replace(tzinfo=JST)
+            entry_date = datetime.strptime(date, "%Y%m%d").date()
         except ValueError:
             continue
-        if dt >= cutoff:
+        if entry_date >= cutoff:
             result.append({"date": date, "title": title, "link": link})
     return result
 
@@ -254,12 +308,7 @@ def record_used_news(site: Path, date_key: str, items: list[dict[str, str]]) -> 
     保存後、30日より古いエントリは削除する。
     """
     path = site / "news_history.json"
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(entries, list):
-            entries = []
-    except (OSError, json.JSONDecodeError):
-        entries = []
+    entries = _read_history_for_update(path)
 
     entries = [e for e in entries if isinstance(e, dict) and e.get("date") != date_key]
     for it in items:
@@ -268,15 +317,18 @@ def record_used_news(site: Path, date_key: str, items: list[dict[str, str]]) -> 
     cutoff = datetime.now(JST) - timedelta(days=_NEWS_KEEP_DAYS)
     kept = []
     for e in entries:
+        date = e.get("date", "")
+        if not isinstance(date, str):
+            continue
         try:
-            dt = datetime.strptime(e.get("date", ""), "%Y%m%d").replace(tzinfo=JST)
+            dt = datetime.strptime(date, "%Y%m%d").replace(tzinfo=JST)
         except ValueError:
             continue
         if dt >= cutoff:
             kept.append(e)
     kept.sort(key=lambda e: e["date"])
 
-    path.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
+    _write_json_atomic(path, kept)
 
 
 def _filter_publishable(metas: list[dict[str, Any]], publish_from: str) -> list[dict[str, Any]]:

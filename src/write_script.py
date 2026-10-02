@@ -14,9 +14,17 @@ from typing import Any
 from anthropic import Anthropic
 
 from .bgm import SECTION_ORDER, plan_spans
+from .glossary_terms import aliases_for, find_duplicate, find_similar, load_alias_groups
+from .holiday_jp import long_holiday_info
 
 JST = timezone(timedelta(hours=9))
+# プロンプトは2分割。固定部（毎日同一。API の system に入れ、プロンプトキャッシュの接頭辞にする）と、
+# 可変部（放送日・履歴・ニュース候補など毎日変わる入力。1通目の user メッセージ）。
+# なお、プロンプトキャッシュが効くのは同一実行内のリトライ（5分TTL内）に限られ、日をまたぐ
+# 呼び出しでは効かない（実行は1日1回のため）。この分割の主目的は、system部を日ごとに
+# 変えない構造にしておくこと（固定部に日付やニュースなど日ごとの値を混ぜない）。
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "assets" / "prompt_script.md"
+DAILY_PROMPT_PATH = Path(__file__).resolve().parent.parent / "assets" / "prompt_daily.md"
 
 SYSTEM = (
     "あなたは日本語ラジオ番組の放送作家です。"
@@ -65,6 +73,18 @@ _BGM_INTRO_BLOCK = """## BGM導入の案内（本日限定）
 """
 
 
+# 大型連休（土日・祝日・年末年始が4日以上続く）に入る日だけプロンプトに差し込む指示ブロック。
+# 連休の初日、またはその前日の平日だけ出す（連休中の2日目以降は出さない）。通常日は空文字。
+# {when} {n} {start} {end} は _holiday_block() が置換で埋める。
+_LONG_HOLIDAY_BLOCK = """## 大型連休の案内（本日限定）
+{when}{n}連休（{start}〜{end}）に入る。オープニング（挨拶・日付）の直後に、エメとルジェの自然な掛け合いで一言（1〜2往復、20秒程度。尺を圧迫しすぎないこと）触れること。
+- 例: エメがテンション高く「連休だー！」と触れ、ルジェが落ち着いて「出かける人も多いよね」と受ける、のようなふたりらしい温度差で
+- 連休中の天気・混雑・イベントなどの具体的な事実は、ニュースリストにある内容だけを使い、創作しない
+- 過去の放送を前提にした言い方（「去年の連休は」など）はしない
+このパートのセリフも section は opening とすること。
+"""
+
+
 def _today_label() -> str:
     now = datetime.now(JST)
     return f"{now.year}年{now.month}月{now.day}日 {_WEEKDAYS[now.weekday()]}曜日"
@@ -96,6 +116,30 @@ def _bgm_intro_block(show_cfg: dict[str, Any] | None) -> str:
         return ""
     today_key = datetime.now(JST).strftime("%Y%m%d")
     return _BGM_INTRO_BLOCK if today_key == intro_date else ""
+
+
+def _holiday_date_label(d: Any) -> str:
+    """例: 10月10日（土）"""
+    return f"{d.month}月{d.day}日（{_WEEKDAYS[d.weekday()]}）"
+
+
+def _holiday_block(now: datetime | None = None) -> str:
+    """今日（JST）が大型連休の初日、または初日の前日の平日なら指示ブロックを返す。該当しない日は空文字。
+
+    判定は src/holiday_jp.py（jpholiday）。そこで例外が出ても None が返るだけなので、
+    放送は止まらず、案内ブロックが出ないだけになる。
+    """
+    now = now or datetime.now(JST)
+    if now.tzinfo is not None:
+        now = now.astimezone(JST)
+    info = long_holiday_info(now.date())
+    if not info:
+        return ""
+    return (_LONG_HOLIDAY_BLOCK
+            .replace("{when}", info["when"])
+            .replace("{n}", str(info["n"]))
+            .replace("{start}", _holiday_date_label(info["start"]))
+            .replace("{end}", _holiday_date_label(info["end"])))
 
 
 def _tomorrow_label() -> str:
@@ -159,12 +203,19 @@ def _format_recent_terms_block(recent_terms: list[dict[str, str]]) -> str:
     if not recent_terms:
         return "（まだ無し）"
     ordered = sorted(recent_terms, key=lambda t: t.get("date", ""), reverse=True)
+    alias_groups = load_alias_groups()
     lines = []
     for t in ordered:
         date = t.get("date", "")
         if len(date) == 8:
             date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
-        lines.append(f"- {date}: {t.get('term', '')}")
+        term = t.get("term", "")
+        line = f"- {date}: {term}"
+        # 英語名・略称・カタカナ表記の揺れも「使用済み」と分かるよう別表記を添える
+        alts = aliases_for(term, alias_groups)
+        if alts:
+            line += f"（別表記: {' / '.join(alts)}）"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -259,9 +310,21 @@ def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]
     haystack = " ".join(f"{n.get('title', '')} {n.get('summary', '')}" for n in used_news).lower()
     if term.lower() not in haystack:
         problems.append(f"「{term}」が本編で実際に扱ったニュースの中に見当たりません")
-    recent_norm = {t.get("term", "").strip().lower() for t in recent_terms}
-    if term.lower() in recent_norm:
-        problems.append(f"「{term}」は直近使用済みです")
+    # 重複判定は表記揺れ（全角/半角・大小・ひらカナ・英語名・略称）を吸収して行う。
+    # recent_terms は公開開始日以降・全期間の履歴（run_daily が渡す）
+    dup = find_duplicate(term, recent_terms, load_alias_groups())
+    if dup is not None:
+        date = dup.get("date", "")
+        if len(date) == 8:
+            date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+        problems.append(f"「{term}」は{date}に使用済みの用語「{dup.get('term', '')}」と"
+                        f"同じです（公開開始以降は再利用禁止）")
+    else:
+        similar = find_similar(term, recent_terms)
+        if similar:
+            # ソフト判定。関連語を誤って弾かないよう、問題にはせずログに残すだけ
+            print(f"[info] 「{term}」は過去の用語と似ています(重複扱いにはしません): "
+                  + " / ".join(f"{s.get('date', '')} {s.get('term', '')}" for s in similar[:3]))
     return problems
 
 
@@ -426,6 +489,38 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
             "lines": clean}
 
 
+def _usage_summary(resp: Any) -> str:
+    """[usage] ログ用の1行（input / cache_write / cache_read / output / stop）。
+
+    値が無い・None・整数でない（MagicMockなど）ものは「?」にする。
+    ログのためだけの処理なので、どんな応答オブジェクトでも絶対に例外を投げない。
+    """
+    def num(obj: Any, name: str) -> str:
+        v = getattr(obj, name, None)
+        return str(v) if isinstance(v, int) and not isinstance(v, bool) else "?"
+
+    try:
+        usage = getattr(resp, "usage", None)
+        stop = getattr(resp, "stop_reason", None)
+        stop = stop if isinstance(stop, str) and stop else "?"
+        return (f"input={num(usage, 'input_tokens')} "
+                f"cache_write={num(usage, 'cache_creation_input_tokens')} "
+                f"cache_read={num(usage, 'cache_read_input_tokens')} "
+                f"output={num(usage, 'output_tokens')} stop={stop}")
+    except Exception:  # noqa: BLE001
+        return "input=? cache_write=? cache_read=? output=? stop=?"
+
+
+def _refusal_category(resp: Any) -> str:
+    """stop_reason が refusal のとき、stop_details.category（cyber / bio 等）を返す。取れなければ「不明」。"""
+    try:
+        details = getattr(resp, "stop_details", None)
+        category = details.get("category") if isinstance(details, dict) else getattr(details, "category", None)
+        return category if isinstance(category, str) and category else "不明"
+    except Exception:  # noqa: BLE001
+        return "不明"
+
+
 def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
                  minutes: int, recent_terms: list[dict[str, str]] | None = None,
                  recent_news: list[dict[str, str]] | None = None,
@@ -440,31 +535,61 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     recent_news = _drop_before_publish(recent_news or [], publish_from,
                                        "ニュース履歴")
 
-    prompt = PROMPT_PATH.read_text(encoding="utf-8").format(
-        today=_today_label(),
-        tomorrow_label=_tomorrow_label(),
+    # system＝固定部（日ごとに変わる値を絶対に混ぜない。キャッシュ効果の実態は冒頭のコメント参照）
+    system_text = SYSTEM + "\n\n" + PROMPT_PATH.read_text(encoding="utf-8").format(
         minutes=minutes,
         target_chars=target_chars,
         max_news=script_cfg.get("max_news", 4),
-        news_block=_news_block(news),
-        recent_terms_block=_format_recent_terms_block(recent_terms),
-        recent_news_block=_format_recent_news_block(recent_news),
-        news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 7),
+        news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 14),
+    )
+    # user（1通目）＝可変部（放送日・履歴・ニュース候補など毎日変わる入力）
+    daily_text = DAILY_PROMPT_PATH.read_text(encoding="utf-8").format(
+        today=_today_label(),
+        tomorrow_label=_tomorrow_label(),
         debut_block=_debut_block(show_cfg),
         bgm_intro_block=_bgm_intro_block(show_cfg),
+        holiday_block=_holiday_block(),
+        news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 14),
+        recent_news_block=_format_recent_news_block(recent_news),
+        recent_terms_block=_format_recent_terms_block(recent_terms),
+        news_block=_news_block(news),
     )
     client = Anthropic()
-    messages = [{"role": "user", "content": prompt}]
+    # キャッシュのブレークポイントは2つだけ（system末尾と、1通目userの末尾）。
+    # リトライ時に追記するメッセージは文字列contentのままにし、1通目を不変に保つ
+    # （同一実行内のリトライ＝5分TTL内の2回目以降の呼び出しで、system＋1通目が
+    # キャッシュから読める）
+    system_blocks = [{"type": "text", "text": system_text,
+                      "cache_control": {"type": "ephemeral"}}]
+    messages = [{"role": "user",
+                 "content": [{"type": "text", "text": daily_text,
+                              "cache_control": {"type": "ephemeral"}}]}]
     last_err: Exception | None = None
+    refusals: list[str] = []
     for attempt in range(_MAX_ATTEMPTS):
         resp = client.messages.create(
             model=script_cfg["model"],
             max_tokens=16000,
-            system=SYSTEM,
+            system=system_blocks,
             messages=messages,
         )
+        usage_line = _usage_summary(resp)
+        print(f"[usage] {usage_line}")
+        stop_reason = getattr(resp, "stop_reason", None)
+        if stop_reason == "refusal":
+            # 安全装置による拒否。messagesは増やさず、同じ内容でそのまま再試行する
+            category = _refusal_category(resp)
+            refusals.append(category)
+            last_err = RuntimeError(f"安全装置により拒否されました: {category}")
+            print(f"[warn] 台本生成が拒否されました (試行{attempt + 1}): "
+                  f"category={category} / {usage_line}")
+            continue
         text = "".join(b.text for b in resp.content if b.type == "text")
         try:
+            if stop_reason == "max_tokens":
+                print(f"[warn] 台本の出力が上限で途中で切れました (試行{attempt + 1}): {usage_line}")
+                raise ValueError("出力が長すぎて途中で切れました。"
+                                 "内容は変えずJSONが閉じる長さに収めて出力し直してください")
             data = _validate(_extract_json(text))
             used_news = _resolve_used_news(data, news, int(script_cfg.get("max_news", 4)))
             problems = _check_glossary_term(data, recent_terms, used_news)
@@ -484,16 +609,24 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
             last_err = e
             print(f"[warn] 台本の検証に失敗 (試行{attempt + 1}): {e}")
             if isinstance(e, json.JSONDecodeError):
-                snippet = text[max(0, e.pos - 80):e.pos + 80]
+                # e.pos は _extract_json が切り出した文字列（e.doc）上の位置。元の応答全文
+                # (text) から切ると、前置きやコードフェンスの分だけ位置がずれる
+                snippet = e.doc[max(0, e.pos - 80):e.pos + 80]
                 print(f"[debug] 失敗箇所付近: ...{snippet}...")
+                if e.pos >= len(e.doc) - 1:
+                    print("[hint] 出力が途中で切れている可能性があります（解析位置が出力の末尾）")
             debug_path = Path(__file__).resolve().parent.parent / "out" / f"last_script_error_{attempt + 1}.txt"
             debug_path.parent.mkdir(parents=True, exist_ok=True)
             debug_path.write_text(text, encoding="utf-8")
             print(f"[debug] 生テキストを保存: {debug_path}")
             retry_hint = (str(e) if isinstance(e, ValueError) and not isinstance(e, json.JSONDecodeError)
                          else "出力が指定のJSON形式ではありません。指定のJSONのみを出力し直してください。")
-            messages += [
-                {"role": "assistant", "content": text},
-                {"role": "user", "content": retry_hint},
-            ]
+            # 出力が空・空白のみ（思考だけで上限に達した等）のときは、空のassistantメッセージを
+            # 積まない（APIは空contentを受け付けない）。userのhintだけを追記する
+            # （同じroleの連続はAPIが1つのターンに結合する）
+            if text.strip():
+                messages.append({"role": "assistant", "content": text})
+            messages.append({"role": "user", "content": retry_hint})
+    if len(refusals) == _MAX_ATTEMPTS:
+        raise RuntimeError(f"台本生成が安全装置により拒否されました: {refusals[-1]}")
     raise RuntimeError(f"台本生成に失敗: {last_err}")

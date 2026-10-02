@@ -61,11 +61,25 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 - 声エンジンは 1.2.0 に固定。上げる時は `scripts/start_engine.sh` の `AIVIS_ENGINE_VERSION` を変え、
   `reading-eval` ワークフローで読みの変化を確認してから
 
+## 重複回避の方針（2026-10-03）
+
+- 「今日のひとこと」は**公開開始日(show.publish_from=20260901)以降の全期間**で重複させない
+  （`glossary_reuse_avoid_days: 0` ＝窓なし。履歴 glossary_history.json も無期限保持）。
+  非公開期間(〜8/31)の履歴は重複判定にもプロンプトにも使わない（`since` と `_drop_before_publish` の2層）
+- 表記揺れ（英語名・カタカナ・略称・括弧つき）は `assets/glossary_aliases.yaml` の別名グループ＋正規化で吸収。
+  新しい用語に英語名などの揺れが出たら、このYAMLに1行（1グループ）追記する（重複判定にのみ使う）
+- ニュースは直近14日(`news_reuse_avoid_days`)の窓。台本生成に渡す履歴は「日付: 名称」の一覧のみ（台本全文は渡さない）
+- プロンプトは固定部 `assets/prompt_script.md`（system・毎日同一）と可変部 `assets/prompt_daily.md`（user）に分割。
+  **固定部に日付・履歴・ニュースなど日ごとに変わる値を混ぜない**（キャッシュ接頭辞が崩れる）
+- 大型連休（土日祝＋12/29〜1/3が4日以上）の初日と前日の平日だけ、案内ブロックを可変部へ差し込む（`src/holiday_jp.py`）
+- 台本モデルは `claude-sonnet-5` を継続。`claude-sonnet-5-5` は現行コードだと思考が出力上限を消費して失敗した
+  (2026-10-03 trial-radio)。再検討するなら `output_config.effort` の指定から
+
 ## 守り（えめるーじぇ流）
 
 - APIキー・トークンをコード/ログ/コミットに絶対に出さない
 - `--dangerously-skip-permissions` は使わない
-- config.yaml と assets/prompt_script.md の内容変更は必ずケイスケに確認を取る
+- config.yaml と assets/prompt_script.md・assets/prompt_daily.md の内容変更は必ずケイスケに確認を取る
   （番組の中身＝看板だから）
 - 依存追加やワークフロー変更時は、月間コスト影響（Claude API・Actions分数）を一言添える
 

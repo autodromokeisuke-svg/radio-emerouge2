@@ -53,13 +53,17 @@ radio-emerouge/
 │   ├── run_daily.py          # 全工程のオーケストレーター
 │   ├── collect_news.py       # ニュース収集
 │   ├── write_script.py       # 台本生成（Claude API）
+│   ├── glossary_terms.py     # 「今日のひとこと」用語の重複判定（表記揺れ対応）
+│   ├── holiday_jp.py         # 大型連休の判定（jpholiday）
 │   ├── build_audio.py        # 収録（合成→結合→MP3）
 │   ├── make_feed.py          # RSS＋アーカイブページ生成
 │   └── tts/                  # 声エンジン差し替え層（aivis/voicevox/elevenlabs）
 ├── scripts/start_engine.sh   # 声エンジンの取得・起動（CI/ローカル共用）
 ├── tools/audition.py         # 声の聴き比べツール（PCで1回だけ使う）
 ├── assets/
-│   ├── prompt_script.md      # 台本プロンプト（番組の魂。変更は要ケイスケ確認）
+│   ├── prompt_script.md      # 台本プロンプト（固定部＝system。番組の魂。変更は要ケイスケ確認）
+│   ├── prompt_daily.md       # 台本プロンプト（毎回変わる入力＝user。放送日・履歴・ニュース候補）
+│   ├── glossary_aliases.yaml # 用語の別表記辞書（英語名・略称など。重複判定用）
 │   └── pilot_script_00.md    # パイロット台本#0（聴き比べ・口調基準）
 └── docs/SETUP.md             # 人間側の準備手順
 ```

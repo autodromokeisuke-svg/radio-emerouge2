@@ -1,10 +1,16 @@
 """_format_recent_terms_block() の単体テスト（標準ライブラリ unittest のみ使用）。"""
 from __future__ import annotations
 
+import copy
+import io
 import json
+import re
 import sys
 import unittest
+from contextlib import redirect_stdout
+from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -12,8 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.write_script import (_check_glossary_term, _check_glossary_topic_safety,
                               _bgm_intro_block, _check_ordinal_references, _check_sections,
                               _drop_before_publish,
-                              _format_recent_terms_block, _resolve_used_news,
-                              _validate, write_script)
+                              _format_recent_terms_block, _holiday_block, _resolve_used_news,
+                              _usage_summary, _validate, write_script)
+from src.write_script import JST as _JST
 
 
 class TestValidateCoveredNewsIndices(unittest.TestCase):
@@ -106,6 +113,150 @@ class TestCheckGlossaryTerm(unittest.TestCase):
         used_news = [{"title": "OCRで手書きメモをデジタル化", "summary": "光学文字認識の新技術"}]
         problems = _check_glossary_term(data, recent_terms=[], used_news=used_news)
         self.assertTrue(any("見当たりません" in p for p in problems))
+
+    def test_reuse_message_cites_date_and_past_term(self) -> None:
+        recent = [{"date": "20260701", "term": "OCR"}]
+        problems = _check_glossary_term({"glossary_term": "OCR"}, recent_terms=recent,
+                                        used_news=self._news())
+        self.assertEqual(problems, ["「OCR」は2026-07-01に使用済みの用語「OCR」と"
+                                    "同じです（公開開始以降は再利用禁止）"])
+
+    def test_notation_variants_of_a_used_term_are_flagged(self) -> None:
+        """全角/半角・大小・ひらカナ・「エーアイ」の違いはすり抜けさせない。"""
+        recent = [{"date": "20260901", "term": "フィジカルAI"}]
+        for variant in ["フィジカルＡＩ", "フィジカルエーアイ", "ふぃじかるAI", "フィジカル ＡＩ",
+                        "「フィジカルAI」"]:
+            with self.subTest(variant=variant):
+                news = [{"title": variant, "summary": ""}]
+                problems = _check_glossary_term({"glossary_term": variant}, recent, news)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("2026-09-01", problems[0])
+
+    def test_alias_dictionary_catches_english_name_and_other_wording(self) -> None:
+        recent = [{"date": "20260901", "term": "フィジカルAI"}]
+        for variant in ["physical AI", "Physical AI", "ＰＨＹＳＩＣＡＬ　ＡＩ", "身体性AI"]:
+            with self.subTest(variant=variant):
+                news = [{"title": variant, "summary": ""}]
+                problems = _check_glossary_term({"glossary_term": variant}, recent, news)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("「フィジカルAI」", problems[0])
+
+    def test_term_with_bracketed_alias_is_flagged_against_the_plain_past_term(self) -> None:
+        """「フィジカルAI（身体性AI）」のような括弧つき表記の素通りを防ぐ。"""
+        recent = [{"date": "20260901", "term": "フィジカルAI"}]
+        for variant in ["フィジカルAI（身体性AI）", "フィジカルAI(Physical AI)"]:
+            with self.subTest(variant=variant):
+                news = [{"title": variant, "summary": ""}]
+                problems = _check_glossary_term({"glossary_term": variant}, recent, news)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("2026-09-01", problems[0])
+                self.assertIn("「フィジカルAI」", problems[0])
+        # 別の用語の括弧つき表記は重複にしない
+        news = [{"title": "マルチエージェント（Multi-Agent）", "summary": ""}]
+        self.assertEqual(_check_glossary_term({"glossary_term": "マルチエージェント（Multi-Agent）"},
+                                              [{"date": "20260901", "term": "AIエージェント"}], news), [])
+
+    def test_alias_dictionary_is_what_catches_english_name(self) -> None:
+        """英語名の同一視は別名辞書の仕事。辞書が空なら通る（辞書が配線されている証拠）。"""
+        recent = [{"date": "20260901", "term": "フィジカルAI"}]
+        news = [{"title": "physical AI", "summary": ""}]
+        with patch("src.write_script.load_alias_groups", return_value=[]):
+            problems = _check_glossary_term({"glossary_term": "physical AI"}, recent, news)
+        self.assertEqual(problems, [])
+
+    def test_related_but_different_term_is_not_flagged(self) -> None:
+        recent = [{"date": "20260901", "term": "マルチエージェント"}]
+        news = [{"title": "AIエージェントが急増", "summary": ""}]
+        problems = _check_glossary_term({"glossary_term": "AIエージェント"}, recent, news)
+        self.assertEqual(problems, [])
+
+    def test_similar_term_only_logs_info_and_is_not_a_problem(self) -> None:
+        recent = [{"date": "20260901", "term": "AIエージェント"}]
+        news = [{"title": "AIエージェント基盤が登場", "summary": ""}]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            problems = _check_glossary_term({"glossary_term": "AIエージェント基盤"}, recent, news)
+        self.assertEqual(problems, [])
+        self.assertIn("[info]", buf.getvalue())
+        self.assertEqual(len(buf.getvalue().strip().splitlines()), 1)
+
+
+class TestGlossaryDuplicateRegression(unittest.TestCase):
+    """2026-10-01実発生の再発防止。10/1放送の「今日のひとこと」が「フィジカルAI」で、
+    9/1放送分と重複した（30日窓から落ちたため）。実データと同じ形の履歴で、
+
+    - 公開開始(9/1)以降の全期間で重複を検知する
+    - 表記揺れ（physical AI）でも検知する
+    - 非公開期間(8月)にしか使っていない用語は、重複扱いにも言及にも使わない（隔離）
+    """
+
+    HISTORY = [{"date": "20260801", "term": "フィジカルAI"},
+               {"date": "20260823", "term": "ソブリンAI"},
+               {"date": "20260901", "term": "フィジカルAI"},
+               {"date": "20260902", "term": "AX戦略"},
+               {"date": "20260915", "term": "ハルシネーション"}]
+
+    def _visible(self, entries=None) -> list[dict[str, str]]:
+        return _drop_before_publish(entries if entries is not None else self.HISTORY,
+                                    "20260901", "テスト")
+
+    @staticmethod
+    def _news(*words: str) -> list[dict[str, str]]:
+        return [{"title": " / ".join(words), "summary": "概要"}]
+
+    def test_term_used_on_publish_start_is_flagged_a_month_later(self) -> None:
+        problems = _check_glossary_term({"glossary_term": "フィジカルAI"}, self._visible(),
+                                        self._news("フィジカルAI"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("2026-09-01", problems[0])
+        self.assertNotIn("2026-08-01", problems[0])
+
+    def test_english_notation_is_also_flagged(self) -> None:
+        problems = _check_glossary_term({"glossary_term": "physical AI"}, self._visible(),
+                                        self._news("physical AI"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("2026-09-01", problems[0])
+
+    def test_term_used_only_in_private_august_is_not_flagged(self) -> None:
+        for term in ["ソブリンAI", "sovereign AI", "主権AI"]:
+            with self.subTest(term=term):
+                problems = _check_glossary_term({"glossary_term": term}, self._visible(),
+                                                self._news(term))
+                self.assertEqual(problems, [])
+
+    def test_august_only_history_does_not_flag_anything(self) -> None:
+        visible = self._visible([{"date": "20260801", "term": "フィジカルAI"}])
+        self.assertEqual(visible, [])
+        problems = _check_glossary_term({"glossary_term": "フィジカルAI"}, visible,
+                                        self._news("フィジカルAI"))
+        self.assertEqual(problems, [])
+
+    def test_unused_term_is_not_flagged(self) -> None:
+        problems = _check_glossary_term({"glossary_term": "マルチモーダル"}, self._visible(),
+                                        self._news("マルチモーダル"))
+        self.assertEqual(problems, [])
+
+    def test_write_script_retries_until_a_fresh_term_and_never_cites_august(self) -> None:
+        news = [{"title": "physical AI と フィジカルAI と ソブリンAI の話題",
+                 "summary": "概要", "source": "s", "link": ""}]
+        bad = {"title": "テスト放送", "glossary_term": "physical AI",
+               "covered_news_indices": [1], "lines": _base_lines()}
+        # 「ソブリンAI」は8月（非公開期間）にしか使っていないので、公開後の放送では初出扱い
+        good = {"title": "テスト放送", "glossary_term": "ソブリンAI",
+                "covered_news_indices": [1], "lines": _base_lines()}
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [_fake_response(bad), _fake_response(good)]
+        with patch("src.write_script.Anthropic", return_value=mock_client), \
+             patch("src.write_script._check_glossary_topic_safety", return_value=[]):
+            result = write_script(news, {"model": "test-model", "chars_per_minute": 320},
+                                  minutes=1, recent_terms=list(self.HISTORY),
+                                  show_cfg={"publish_from": "20260901"})
+        self.assertEqual(result["glossary_term"], "ソブリンAI")
+        self.assertEqual(mock_client.messages.create.call_count, 2)
+        hint = mock_client.messages.create.call_args.kwargs["messages"][-1]["content"]
+        self.assertIn("2026-09-01", hint)
+        self.assertIn("使用済み", hint)
+        self.assertNotIn("2026-08", hint)
 
 
 class TestResolveUsedNews(unittest.TestCase):
@@ -281,7 +432,7 @@ class TestBgmIntroBlock(unittest.TestCase):
             with patch("src.write_script.Anthropic", return_value=mock_client),                  patch("src.write_script._check_glossary_topic_safety", return_value=[]):
                 write_script(news, {"model": "m", "chars_per_minute": 320}, minutes=1,
                              show_cfg=show_cfg)
-            return mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+            return _prompt_text(mock_client.messages.create.call_args.kwargs)
 
         self.assertIn("番組にBGMが入りました", prompt_for({"bgm_intro_date": self._today()}))
         self.assertNotIn("番組にBGMが入りました", prompt_for({"bgm_intro_date": "20000101"}))
@@ -355,6 +506,27 @@ def _fake_response(payload: dict) -> MagicMock:
     resp = MagicMock()
     resp.content = [block]
     return resp
+
+
+def _blocks_text(content) -> str:
+    """system / user の content（文字列、または text ブロックのリスト）を1つの文字列にする。"""
+    if isinstance(content, str):
+        return content
+    return "\n".join(b["text"] for b in content)
+
+
+def _system_text(call_kwargs: dict) -> str:
+    return _blocks_text(call_kwargs["system"])
+
+
+def _user_text(call_kwargs: dict) -> str:
+    """1通目のuserメッセージ（可変部）のテキスト。"""
+    return _blocks_text(call_kwargs["messages"][0]["content"])
+
+
+def _prompt_text(call_kwargs: dict) -> str:
+    """プロンプト全体（system＋1通目user）のテキスト。分割前の「1本のプロンプト」と同じ検査に使う。"""
+    return _system_text(call_kwargs) + "\n" + _user_text(call_kwargs)
 
 
 # BGMの区間判定用のsectionラベル（opening→news→glossary→ending の順）。
@@ -456,6 +628,25 @@ class TestFormatRecentTermsBlock(unittest.TestCase):
         ])
         self.assertLess(result.index("2026-07-07"), result.index("2026-06-20"))
 
+    def test_line_format_is_date_colon_term(self) -> None:
+        result = _format_recent_terms_block([{"date": "20260905", "term": "OCR"}])
+        self.assertEqual(result, "- 2026-09-05: OCR")
+
+    def test_aliases_are_appended_only_when_the_term_has_some(self) -> None:
+        result = _format_recent_terms_block([
+            {"date": "20260901", "term": "フィジカルAI"},
+            {"date": "20260905", "term": "OCR"},
+        ])
+        self.assertEqual(result.splitlines(), [
+            "- 2026-09-05: OCR",
+            "- 2026-09-01: フィジカルAI（別表記: physical AI / 身体性AI）",
+        ])
+
+    def test_no_alias_note_when_dictionary_is_unavailable(self) -> None:
+        with patch("src.write_script.load_alias_groups", return_value=[]):
+            result = _format_recent_terms_block([{"date": "20260901", "term": "フィジカルAI"}])
+        self.assertEqual(result, "- 2026-09-01: フィジカルAI")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -512,7 +703,7 @@ class TestWriteScriptHidesPrePublishHistory(unittest.TestCase):
                              {"date": "20260902", "title": "霞が関にAI課長？"}],
                 show_cfg=show_cfg,
             )
-        return mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        return _prompt_text(mock_client.messages.create.call_args.kwargs)
 
     def test_pre_publish_history_is_absent_from_prompt(self) -> None:
         prompt = self._run_and_capture_prompt({"publish_from": "20260901"})
@@ -529,3 +720,500 @@ class TestWriteScriptHidesPrePublishHistory(unittest.TestCase):
         prompt = self._run_and_capture_prompt({})
         self.assertIn("OpenAIの暴走AI", prompt)
         self.assertIn("AIウォッシング", prompt)
+
+
+# ---------------------------------------------------------------------------
+# プロンプト分割（system=固定部 / user=可変部）・プロンプトキャッシュ・usageログ・
+# stop_reason（max_tokens / refusal）・大型連休ブロック
+# ---------------------------------------------------------------------------
+
+def _resp(payload, stop_reason="end_turn", usage=None, stop_details=None) -> SimpleNamespace:
+    """Anthropic のレスポンスに似せた軽量オブジェクト（MagicMockと違い、属性が無ければ本当に無い）。"""
+    text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)],
+                           stop_reason=stop_reason, usage=usage, stop_details=stop_details)
+
+
+def _good_payload(term: str = "OCR") -> dict:
+    return {"title": "テスト放送", "glossary_term": term,
+            "covered_news_indices": [1], "lines": _base_lines()}
+
+
+_DEFAULT_NEWS = [{"title": "OCRで手書きメモをデジタル化", "summary": "光学文字認識の新技術",
+                  "source": "s", "link": ""}]
+
+
+def _run_recorded(responses, news=None, holiday_block="", script_extra=None, **kwargs):
+    """APIをモックして write_script を実行する。
+
+    戻り値: (結果 または RuntimeError, 各 create 呼び出し時点の kwargs のスナップショット, 標準出力)
+    リトライで messages が後から増えても、各呼び出しの時点の中身を比較できるよう deepcopy で記録する。
+    大型連休ブロックは実行日に左右されないよう holiday_block で固定する。
+    """
+    calls: list[dict] = []
+    queue = list(responses)
+
+    def fake_create(**kw):
+        calls.append(copy.deepcopy(kw))
+        return queue.pop(0)
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = fake_create
+    buf = io.StringIO()
+    with patch("src.write_script.Anthropic", return_value=mock_client), \
+         patch("src.write_script._check_glossary_topic_safety", return_value=[]), \
+         patch("src.write_script._holiday_block", return_value=holiday_block), \
+         redirect_stdout(buf):
+        try:
+            outcome = write_script(news if news is not None else _DEFAULT_NEWS,
+                                   {"model": "test-model", "chars_per_minute": 320,
+                                    **(script_extra or {})},
+                                   minutes=1, **kwargs)
+        except RuntimeError as e:
+            outcome = e
+    return outcome, calls, buf.getvalue()
+
+
+def _count_cache_controls(call_kwargs: dict) -> int:
+    blocks = [] if isinstance(call_kwargs["system"], str) else list(call_kwargs["system"])
+    for m in call_kwargs["messages"]:
+        if not isinstance(m["content"], str):
+            blocks += list(m["content"])
+    return sum(1 for b in blocks if "cache_control" in b)
+
+
+class TestPromptSplitAndCache(unittest.TestCase):
+    """固定部=system、可変部=1通目user。systemは日が変わっても完全一致（キャッシュ接頭辞の安定性）。"""
+
+    def _run_day(self, label: str, tomorrow: str, tag: str, debut: str, bgm: str, holiday: str):
+        news = [{"title": f"{tag}のニュース見出し OCR", "summary": f"{tag}の概要",
+                 "source": "s", "link": ""}]
+        with patch("src.write_script._today_label", return_value=label), \
+             patch("src.write_script._tomorrow_label", return_value=tomorrow), \
+             patch("src.write_script._debut_block", return_value=debut), \
+             patch("src.write_script._bgm_intro_block", return_value=bgm):
+            outcome, calls, _ = _run_recorded(
+                [_resp(_good_payload("OCR"))], news=news, holiday_block=holiday,
+                recent_terms=[{"date": "20260929", "term": f"{tag}の用語"}],
+                recent_news=[{"date": "20260930", "title": f"{tag}の履歴ニュース"}],
+                show_cfg={"publish_from": "20260901"})
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 1)
+        return calls[0]
+
+    def _two_days(self):
+        day1 = self._run_day("2026年10月2日 金曜日", "土曜日", "DAYONE", "## 初回放送の案内（本日限定）\nデビュー指示\n",
+                             "", _holiday_block(datetime(2026, 9, 18, 7, tzinfo=_JST)))
+        day2 = self._run_day("2026年10月3日 土曜日", "日曜日", "DAYTWO", "",
+                             "## BGM導入の案内（本日限定）\nBGM指示\n", "")
+        return day1, day2
+
+    def test_system_is_identical_across_days(self) -> None:
+        day1, day2 = self._two_days()
+        self.assertEqual(day1["system"], day2["system"])
+        # 逆に、可変部（user）は日ごとにちゃんと違う
+        self.assertNotEqual(day1["messages"][0], day2["messages"][0])
+
+    def test_system_has_fixed_prompt_and_no_leftover_placeholders(self) -> None:
+        day1, _ = self._two_days()
+        system = _system_text(day1)
+        self.assertTrue(system.startswith("あなたは日本語ラジオ番組の放送作家です。"))
+        self.assertIn("RADIOえめるーじぇ", system)
+        self.assertIn("目標尺: 約1分（日本語で合計320文字以上", system)
+        self.assertIsNone(re.search(r"\{[a-z_]+\}", system), "固定部に未置換のプレースホルダが残っている")
+        self.assertIsNone(re.search(r"\{[a-z_]+\}", _user_text(day1)))
+
+    def test_per_day_values_are_in_user_and_never_in_system(self) -> None:
+        day1, _ = self._two_days()
+        system, user = _system_text(day1), _user_text(day1)
+        for needle in ["2026年10月2日 金曜日", "土曜日", "DAYONEのニュース見出し", "DAYONEの概要",
+                       "DAYONEの履歴ニュース", "2026-09-30", "DAYONEの用語", "2026-09-29",
+                       "デビュー指示", "大型連休の案内（本日限定）", "明日から5連休"]:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, user)
+                self.assertNotIn(needle, system)
+
+    def test_cache_breakpoints_are_exactly_two(self) -> None:
+        recent = [{"date": "20260905", "term": "OCR"}]
+        news = [{"title": "OCRで手書きメモをデジタル化", "summary": "光学文字認識の新技術", "source": "s", "link": ""}]
+        # 1回目は用語が使用済みで差し戻し → 2回目で成功（追記メッセージが付いた状態も検査する）
+        outcome, calls, _ = _run_recorded(
+            [_resp(_good_payload("OCR")), _resp(_good_payload("手書きメモ"))],
+            news=news, recent_terms=recent)
+        self.assertEqual(outcome["glossary_term"], "手書きメモ")
+        self.assertEqual(len(calls), 2)
+        for kw in calls:
+            self.assertEqual(kw["system"][-1]["cache_control"], {"type": "ephemeral"})
+            first_user = kw["messages"][0]
+            self.assertEqual(first_user["role"], "user")
+            self.assertEqual(first_user["content"][-1]["cache_control"], {"type": "ephemeral"})
+            self.assertEqual(_count_cache_controls(kw), 2)
+            self.assertEqual(kw["max_tokens"], 16000)
+
+    def test_retry_keeps_first_message_and_appends_plain_strings(self) -> None:
+        recent = [{"date": "20260905", "term": "OCR"}]
+        outcome, calls, _ = _run_recorded(
+            [_resp(_good_payload("OCR")), _resp(_good_payload("手書きメモ"))], recent_terms=recent)
+        self.assertEqual(len(calls[0]["messages"]), 1)
+        self.assertEqual(len(calls[1]["messages"]), 3)
+        # 1通目と system は不変（リトライ時にキャッシュが読める）
+        self.assertEqual(calls[1]["messages"][0], calls[0]["messages"][0])
+        self.assertEqual(calls[1]["system"], calls[0]["system"])
+        # 追記分は文字列content
+        self.assertEqual(calls[1]["messages"][1]["role"], "assistant")
+        self.assertIsInstance(calls[1]["messages"][1]["content"], str)
+        self.assertEqual(calls[1]["messages"][2]["role"], "user")
+        self.assertIsInstance(calls[1]["messages"][2]["content"], str)
+        self.assertIn("使用済み", calls[1]["messages"][2]["content"])
+
+
+class TestNewsReuseAvoidDaysDefault(unittest.TestCase):
+    """news_reuse_avoid_days のコード内既定値は config.yaml と同じ14日。"""
+
+    def test_default_is_14_days_in_both_system_and_user_prompts(self) -> None:
+        _, calls, _ = _run_recorded([_resp(_good_payload())])
+        self.assertIn("直近14日以内に扱った", _system_text(calls[0]))
+        self.assertIn("直近14日で扱ったニュース", _system_text(calls[0]))
+        self.assertIn("直近14日で扱ったニュース:", _user_text(calls[0]))
+        self.assertNotIn("直近7日", _prompt_text(calls[0]))
+
+    def test_explicit_config_value_wins_over_the_default(self) -> None:
+        _, calls, _ = _run_recorded([_resp(_good_payload())],
+                                    script_extra={"news_reuse_avoid_days": 7})
+        self.assertIn("直近7日で扱ったニュース:", _user_text(calls[0]))
+        self.assertIn("直近7日以内に扱った", _system_text(calls[0]))
+        self.assertNotIn("直近14日", _prompt_text(calls[0]))
+
+
+class TestUsageLog(unittest.TestCase):
+    def test_summary_with_real_numbers(self) -> None:
+        usage = SimpleNamespace(input_tokens=1200, cache_creation_input_tokens=4000,
+                                cache_read_input_tokens=0, output_tokens=9000)
+        self.assertEqual(_usage_summary(_resp(_good_payload(), usage=usage)),
+                         "input=1200 cache_write=4000 cache_read=0 output=9000 stop=end_turn")
+
+    def test_summary_never_raises_on_odd_responses(self) -> None:
+        unknown = "input=? cache_write=? cache_read=? output=? stop=?"
+        for label, resp in [
+            ("MagicMock", MagicMock()),
+            ("usageなし", SimpleNamespace(content=[])),
+            ("usage=None", SimpleNamespace(usage=None, stop_reason=None)),
+            ("None自体", None),
+            ("各値None", SimpleNamespace(usage=SimpleNamespace(
+                input_tokens=None, cache_creation_input_tokens=None,
+                cache_read_input_tokens=None, output_tokens=None), stop_reason=None)),
+            ("文字列の値", SimpleNamespace(usage=SimpleNamespace(input_tokens="x"), stop_reason=3)),
+        ]:
+            with self.subTest(label=label):
+                self.assertEqual(_usage_summary(resp), unknown)
+
+    def test_one_usage_line_per_call_with_values(self) -> None:
+        usage = SimpleNamespace(input_tokens=11, cache_creation_input_tokens=22,
+                                cache_read_input_tokens=33, output_tokens=44)
+        outcome, calls, out = _run_recorded([_resp(_good_payload(), usage=usage)])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(out.count("[usage]"), 1)
+        self.assertIn("[usage] input=11 cache_write=22 cache_read=33 output=44 stop=end_turn", out)
+
+    def test_missing_usage_attribute_does_not_crash(self) -> None:
+        resp = SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(
+            _good_payload(), ensure_ascii=False))])  # usage も stop_reason も無い
+        outcome, _, out = _run_recorded([resp])
+        self.assertIsInstance(outcome, dict)
+        self.assertIn("[usage] input=? cache_write=? cache_read=? output=? stop=?", out)
+
+    def test_magicmock_response_does_not_crash(self) -> None:
+        """既存テストと同じMagicMock応答（usage・stop_reasonがMagicMockになる）でも落ちない。"""
+        outcome, _, out = _run_recorded([_fake_response(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertIn("[usage] input=? cache_write=? cache_read=? output=? stop=?", out)
+
+    def test_usage_is_logged_for_every_attempt(self) -> None:
+        recent = [{"date": "20260905", "term": "OCR"}]
+        outcome, calls, out = _run_recorded(
+            [_resp(_good_payload("OCR")), _resp(_good_payload("手書きメモ"))], recent_terms=recent)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(out.count("[usage]"), 2)
+
+    def test_no_secret_like_value_is_logged(self) -> None:
+        _, _, out = _run_recorded([_resp(_good_payload())])
+        self.assertNotIn("sk-ant", out)
+
+
+class TestStopReasonHandling(unittest.TestCase):
+    TRUNCATED = '{"title": "テスト放送", "glossary_term": "OCR", "lines": [{"speaker": "eme", "section": "opening", "te'
+
+    def test_max_tokens_is_retried_with_a_length_hint(self) -> None:
+        usage = SimpleNamespace(input_tokens=5000, cache_creation_input_tokens=0,
+                                cache_read_input_tokens=4800, output_tokens=16000)
+        outcome, calls, out = _run_recorded([
+            _resp(self.TRUNCATED, stop_reason="max_tokens", usage=usage),
+            _resp(_good_payload()),
+        ])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+        hint = calls[1]["messages"][-1]["content"]
+        self.assertIn("出力が長すぎて途中で切れました", hint)
+        self.assertIn("JSONが閉じる長さに収めて出力し直してください", hint)
+        self.assertEqual(calls[1]["messages"][1], {"role": "assistant", "content": self.TRUNCATED})
+        # [warn] に usage も出る
+        warn_lines = [ln for ln in out.splitlines()
+                      if ln.startswith("[warn]") and "途中で切れ" in ln and "stop=max_tokens" in ln]
+        self.assertEqual(len(warn_lines), 1)
+        self.assertIn("input=5000", warn_lines[0])
+        self.assertIn("cache_read=4800", warn_lines[0])
+        self.assertIn("output=16000", warn_lines[0])
+
+    def test_max_tokens_is_a_failure_even_if_the_text_happens_to_be_valid_json(self) -> None:
+        outcome, calls, _ = _run_recorded([
+            _resp(_good_payload(), stop_reason="max_tokens"),
+            _resp(_good_payload()),
+        ])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+
+    def test_max_tokens_on_every_attempt_raises(self) -> None:
+        outcome, calls, _ = _run_recorded(
+            [_resp(self.TRUNCATED, stop_reason="max_tokens")] * 3)
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertEqual(len(calls), 3)
+        self.assertIn("台本生成に失敗", str(outcome))
+        self.assertIn("出力が長すぎて途中で切れました", str(outcome))
+
+    def test_refusal_is_retried_without_growing_messages(self) -> None:
+        refusal = _resp("", stop_reason="refusal", stop_details=SimpleNamespace(
+            type="refusal", category="cyber", explanation=None))
+        outcome, calls, out = _run_recorded([refusal, _resp(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls[0]["messages"]), 1)
+        self.assertEqual(len(calls[1]["messages"]), 1)
+        self.assertEqual(calls[1]["messages"], calls[0]["messages"])
+        self.assertEqual(calls[1]["system"], calls[0]["system"])
+        warn_lines = [ln for ln in out.splitlines() if ln.startswith("[warn]") and "拒否" in ln]
+        self.assertEqual(len(warn_lines), 1)
+        self.assertIn("cyber", warn_lines[0])
+
+    def test_refusal_on_every_attempt_raises_with_category(self) -> None:
+        refusal = _resp("", stop_reason="refusal", stop_details=SimpleNamespace(category="bio"))
+        outcome, calls, _ = _run_recorded([refusal] * 3)
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertEqual(str(outcome), "台本生成が安全装置により拒否されました: bio")
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(len(kw["messages"]) == 1 for kw in calls))
+
+    def test_refusal_category_unknown_when_stop_details_missing(self) -> None:
+        outcome, _, _ = _run_recorded([_resp("", stop_reason="refusal")] * 3)
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertEqual(str(outcome), "台本生成が安全装置により拒否されました: 不明")
+
+    def test_refusal_category_may_be_a_dict(self) -> None:
+        refusal = _resp("", stop_reason="refusal", stop_details={"category": "frontier_llm"})
+        outcome, _, _ = _run_recorded([refusal] * 3)
+        self.assertEqual(str(outcome), "台本生成が安全装置により拒否されました: frontier_llm")
+
+    def test_mixed_refusal_and_other_failure_reports_the_generic_failure(self) -> None:
+        """全試行が拒否ではない場合は、拒否専用のメッセージにしない。"""
+        refusal = _resp("", stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"))
+        outcome, calls, _ = _run_recorded([
+            refusal, refusal, _resp(self.TRUNCATED, stop_reason="max_tokens")])
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertTrue(str(outcome).startswith("台本生成に失敗"))
+        self.assertEqual(len(calls), 3)
+
+    def test_normal_stop_reasons_are_not_failures(self) -> None:
+        for stop in ["end_turn", "stop_sequence", None]:
+            with self.subTest(stop=stop):
+                outcome, calls, _ = _run_recorded([_resp(_good_payload(), stop_reason=stop)])
+                self.assertIsInstance(outcome, dict)
+                self.assertEqual(len(calls), 1)
+
+
+def _thinking_only_resp(stop_reason: str = "max_tokens") -> SimpleNamespace:
+    """textブロックが無く、thinkingブロックだけの応答（思考だけで出力上限に達したケース）。"""
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="thinking", thinking="考え中" * 100, signature="sig")],
+        stop_reason=stop_reason, usage=None, stop_details=None)
+
+
+class TestRetryDoesNotSendEmptyAssistantMessage(unittest.TestCase):
+    """出力が空・空白のとき、空のassistantメッセージを付けて再送しない（APIは空contentを拒否する）。"""
+
+    TRUNCATED = '{"title": "テスト放送", "glossary_term": "OCR", "lines": [{"speaker": "eme", "te'
+
+    def assertNoEmptyContent(self, call_kwargs: dict) -> None:
+        for m in call_kwargs["messages"]:
+            content = m["content"]
+            joined = content if isinstance(content, str) else "".join(b.get("text", "") for b in content)
+            self.assertTrue(joined.strip(), f"空のcontentのメッセージがある: {m}")
+
+    def test_thinking_only_response_with_max_tokens_adds_no_assistant_message(self) -> None:
+        outcome, calls, _ = _run_recorded([_thinking_only_resp("max_tokens"), _resp(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+        second = calls[1]["messages"]
+        self.assertNoEmptyContent(calls[1])
+        self.assertNotIn("assistant", [m["role"] for m in second])
+        # 1通目（キャッシュ対象）は不変で、userのhintだけが追記される
+        self.assertEqual(second[0], calls[0]["messages"][0])
+        self.assertEqual([m["role"] for m in second], ["user", "user"])
+        self.assertIsInstance(second[1]["content"], str)
+        self.assertIn("出力が長すぎて途中で切れました", second[1]["content"])
+
+    def test_whitespace_only_text_adds_no_assistant_message(self) -> None:
+        outcome, calls, _ = _run_recorded([_resp(" \n\t  \n", stop_reason="end_turn"),
+                                           _resp(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+        self.assertNoEmptyContent(calls[1])
+        self.assertEqual([m["role"] for m in calls[1]["messages"]], ["user", "user"])
+        self.assertTrue(calls[1]["messages"][1]["content"].strip())
+
+    def test_empty_on_every_attempt_never_sends_an_empty_message(self) -> None:
+        outcome, calls, _ = _run_recorded([_thinking_only_resp()] * 3)
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertEqual(len(calls), 3)
+        for kw in calls:
+            self.assertNoEmptyContent(kw)
+            self.assertNotIn("assistant", [m["role"] for m in kw["messages"]])
+        self.assertEqual([len(kw["messages"]) for kw in calls], [1, 2, 3])
+
+    def test_truncated_but_non_empty_text_is_still_stacked_as_assistant(self) -> None:
+        for stop in ["max_tokens", "end_turn"]:
+            with self.subTest(stop=stop):
+                outcome, calls, _ = _run_recorded([_resp(self.TRUNCATED, stop_reason=stop),
+                                                   _resp(_good_payload())])
+                self.assertIsInstance(outcome, dict)
+                second = calls[1]["messages"]
+                self.assertEqual([m["role"] for m in second], ["user", "assistant", "user"])
+                self.assertEqual(second[1]["content"], self.TRUNCATED)
+                self.assertNoEmptyContent(calls[1])
+
+    def test_empty_then_truncated_then_good_keeps_alternation_where_it_can(self) -> None:
+        """空→途中切れ→成功。空の回はuserだけ、途中切れの回はassistant+userが積まれる。"""
+        outcome, calls, _ = _run_recorded([_thinking_only_resp(), _resp(self.TRUNCATED),
+                                           _resp(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual([m["role"] for m in calls[2]["messages"]],
+                         ["user", "user", "assistant", "user"])
+        self.assertNoEmptyContent(calls[2])
+
+
+class TestJsonFailureDebugOutput(unittest.TestCase):
+    """JSON解析失敗時の[debug]出力は、解析した文字列(e.doc)上の位置から切る。"""
+
+    PREAMBLE = "以下が台本です。ご確認ください。\n" * 12   # 位置ずれを起こすための長い前置き
+    BAD_BODY = ('{"title": "T", "lines": [{"speaker": "eme", "text": "MARKERBEFORE"} '
+                '{"speaker": "ruje", "text": "MARKERAFTER"}]}')   # 1つ目の要素の後に「,」が無い
+    TRUNCATED_BODY = '{"title": "T", "lines": [{"speaker": "eme", "text": "a"}, {"speaker": "ruje", "te'
+
+    def _debug_lines(self, text: str) -> list[str]:
+        outcome, calls, out = _run_recorded([_resp(text), _resp(_good_payload())])
+        self.assertIsInstance(outcome, dict)
+        self.assertEqual(len(calls), 2)
+        return out.splitlines()
+
+    def test_snippet_is_cut_from_the_extracted_json_not_from_the_whole_response(self) -> None:
+        text = self.PREAMBLE + "```json\n" + self.BAD_BODY + "\n```"
+        with self.assertRaises(json.JSONDecodeError) as cm:
+            json.loads(self.BAD_BODY)
+        e = cm.exception
+        expected = e.doc[max(0, e.pos - 80):e.pos + 80]
+        lines = self._debug_lines(text)
+        snippet_lines = [ln for ln in lines if ln.startswith("[debug] 失敗箇所付近")]
+        self.assertEqual(snippet_lines, [f"[debug] 失敗箇所付近: ...{expected}..."])
+        self.assertIn("MARKERBEFORE", snippet_lines[0])
+        self.assertIn("MARKERAFTER", snippet_lines[0])
+        self.assertNotIn("以下が台本です", snippet_lines[0])   # 位置ずれていれば前置きが出る
+
+    def test_no_truncation_hint_when_the_error_is_in_the_middle(self) -> None:
+        text = self.PREAMBLE + "```json\n" + self.BAD_BODY + "\n```"
+        self.assertEqual([ln for ln in self._debug_lines(text) if ln.startswith("[hint]")], [])
+
+    def test_truncation_hint_when_the_parse_position_is_the_end_of_the_output(self) -> None:
+        text = self.PREAMBLE + "```json\n" + self.TRUNCATED_BODY
+        lines = self._debug_lines(text)
+        hints = [ln for ln in lines if ln.startswith("[hint]")]
+        self.assertEqual(hints, ["[hint] 出力が途中で切れている可能性があります（解析位置が出力の末尾）"])
+        snippet = [ln for ln in lines if ln.startswith("[debug] 失敗箇所付近")][0]
+        self.assertIn('"text": "a"}', snippet)
+        self.assertNotIn("以下が台本です", snippet)
+
+    def test_no_debug_snippet_or_hint_for_non_json_decode_errors(self) -> None:
+        """JSONが見つからない（ValueError）場合は snippet も hint も出さない。"""
+        lines = self._debug_lines("JSONではない普通の文章です")
+        self.assertEqual([ln for ln in lines if ln.startswith(("[hint]", "[debug] 失敗箇所付近"))], [])
+
+
+class TestHolidayBlock(unittest.TestCase):
+    JST = _JST
+
+    def test_block_is_rendered_the_day_before_a_long_holiday(self) -> None:
+        block = _holiday_block(datetime(2026, 9, 18, 7, 0, tzinfo=self.JST))
+        self.assertTrue(block.startswith("## 大型連休の案内（本日限定）\n"))
+        self.assertIn("明日から5連休（9月19日（土）〜9月23日（水））に入る。", block)
+        self.assertIn("このパートのセリフも section は opening とすること。", block)
+        self.assertNotIn("{", block)
+        self.assertNotIn("}", block)
+        self.assertTrue(block.endswith("\n"))
+
+    def test_block_says_today_on_the_first_day(self) -> None:
+        block = _holiday_block(datetime(2026, 5, 2, 7, 0, tzinfo=self.JST))
+        self.assertIn("今日から5連休（5月2日（土）〜5月6日（水））に入る。", block)
+
+    def test_date_label_format(self) -> None:
+        block = _holiday_block(datetime(2026, 12, 28, 7, 0, tzinfo=self.JST))
+        self.assertIn("明日から6連休（12月29日（火）〜1月3日（日））に入る。", block)
+
+    def test_no_block_on_ordinary_days_and_inside_the_holiday(self) -> None:
+        for d in [datetime(2026, 10, 3, 7, tzinfo=self.JST),     # 通常の土曜
+                  datetime(2026, 10, 9, 7, tzinfo=self.JST),     # 10/10〜12は3連休
+                  datetime(2026, 9, 20, 7, tzinfo=self.JST),     # 連休2日目
+                  datetime(2026, 9, 23, 7, tzinfo=self.JST),     # 連休最終日
+                  datetime(2026, 9, 24, 7, tzinfo=self.JST)]:    # 連休明け
+            with self.subTest(d=d):
+                self.assertEqual(_holiday_block(d), "")
+
+    def test_jst_is_used_even_for_utc_input(self) -> None:
+        # UTC 2026-09-17 22:00 は JST 2026-09-18 07:00（連休の前日）
+        self.assertIn("明日から5連休", _holiday_block(datetime(2026, 9, 17, 22, 0, tzinfo=timezone.utc)))
+        # UTC 2026-09-18 22:00 は JST 2026-09-19 07:00（連休の初日）
+        self.assertIn("今日から5連休", _holiday_block(datetime(2026, 9, 18, 22, 0, tzinfo=timezone.utc)))
+
+    def test_naive_datetime_is_treated_as_jst(self) -> None:
+        self.assertIn("明日から5連休", _holiday_block(datetime(2026, 9, 18, 7, 0)))
+
+    def test_default_uses_the_current_jst_date(self) -> None:
+        fixed = {"when": "今日から", "n": 4, "start": date(2026, 10, 10), "end": date(2026, 10, 13)}
+        with patch("src.write_script.long_holiday_info", return_value=fixed) as m:
+            block = _holiday_block()
+        self.assertEqual(m.call_count, 1)
+        self.assertIn("今日から4連休（10月10日（土）〜10月13日（火））に入る。", block)
+
+    def test_calendar_failure_means_no_block_and_no_crash(self) -> None:
+        with patch("src.holiday_jp.jpholiday", None), redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(_holiday_block(datetime(2026, 9, 18, 7, tzinfo=self.JST)), "")
+        self.assertEqual(len([ln for ln in buf.getvalue().splitlines() if ln.startswith("[warn]")]), 1)
+
+    def test_block_reaches_user_prompt_only_and_the_fixed_prompt_stays_stable(self) -> None:
+        block = _holiday_block(datetime(2026, 9, 18, 7, tzinfo=self.JST))
+        with_block = _run_recorded([_resp(_good_payload())], holiday_block=block)[1][0]
+        without = _run_recorded([_resp(_good_payload())], holiday_block="")[1][0]
+        self.assertIn("大型連休の案内（本日限定）", _user_text(with_block))
+        self.assertNotIn("大型連休の案内（本日限定）", _user_text(without))
+        self.assertNotIn("大型連休の案内", _system_text(with_block))
+        self.assertEqual(with_block["system"], without["system"])
+
+    def test_write_script_survives_a_broken_calendar(self) -> None:
+        """jpholiday が壊れていても台本生成は止まらず、案内ブロックだけが出ない。"""
+        broken = MagicMock()
+        broken.is_holiday.side_effect = RuntimeError("boom")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _resp(_good_payload())
+        with patch("src.write_script.Anthropic", return_value=mock_client), \
+             patch("src.write_script._check_glossary_topic_safety", return_value=[]), \
+             patch("src.holiday_jp.jpholiday", broken), \
+             redirect_stdout(io.StringIO()):
+            result = write_script(_DEFAULT_NEWS, {"model": "m", "chars_per_minute": 320}, minutes=1)
+        self.assertEqual(result["glossary_term"], "OCR")
+        self.assertNotIn("大型連休の案内", _user_text(mock_client.messages.create.call_args.kwargs))
