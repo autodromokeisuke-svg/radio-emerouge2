@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>プライバシーポリシー｜RADIOえめるーじぇ</title>
+<style>
+  :root { --bg:#1c1713; --ink:#eae0d0; --sub:#a89a86; --gold:#c9a44c; --line:#3a3128; }
+  * { box-sizing:border-box; margin:0 }
+  body { background:var(--bg); color:var(--ink); font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;
+         max-width:640px; margin:0 auto; padding:48px 20px 80px; line-height:1.8 }
+  h1 { font-family:"Hiragino Mincho ProN","Yu Mincho",serif; font-weight:600; font-size:1.6rem;
+       letter-spacing:.06em; border-bottom:1px solid var(--line); padding-bottom:16px }
+  h1 small { display:block; color:var(--sub); font-size:.72rem; letter-spacing:.28em; margin-bottom:6px }
+  h2 { font-family:"Hiragino Mincho ProN","Yu Mincho",serif; font-size:1.05rem; font-weight:600;
+       color:var(--gold); margin:32px 0 8px }
+  p { margin:8px 0 }
+  ul { margin:8px 0 8px 1.2em }
+  li { margin:4px 0 }
+  .meta { color:var(--sub); font-size:.8rem; letter-spacing:.12em; margin-top:12px }
+  .foot { border-top:1px solid var(--line); margin-top:40px; padding-top:16px;
+          color:var(--sub); font-size:.8rem }
+  a { color:var(--gold) }
+</style>
+</head>
+<body>
+<h1><small>PRIVACY POLICY</small>プライバシーポリシー</h1>
+<p class="meta">最終更新: 2026年9月2日</p>
+
+<h2>1. 本ポリシーの対象</h2>
+<p>本ポリシーは、個人が制作・運営するポッドキャスト番組「RADIOえめるーじぇ」の番組ページ、および番組の配信を自動化するために運営者が使用しているアプリケーション「RADIOえめるーじぇ」（Google OAuth クライアント）に適用されます。</p>
+<p>本アプリケーションは<strong>運営者本人専用の自動化ツール</strong>であり、運営者以外の利用者を想定していません。運営者本人のYouTubeチャンネルへ、生成した番組音声を自動投稿する目的でのみ使用されます。</p>
+
+<h2>2. 収集する情報</h2>
+<p>本番組ページおよび本アプリケーションは、利用者の個人情報を収集しません。</p>
+<ul>
+  <li>番組ページにアクセス解析ツール・広告タグ・トラッキング用スクリプトを設置していません</li>
+  <li>フォーム等による氏名・メールアドレス等の入力を求めることはありません</li>
+  <li>Cookieを利用していません</li>
+</ul>
+<p>なお、番組ページはGitHub Pages上で配信されており、配信基盤であるGitHub社のサーバーによるアクセスログの取得については同社の方針に従います。運営者はこれらのログを参照できません。</p>
+
+<h2>3. Google APIから取得する情報とその利用</h2>
+<p>本アプリケーションは、Google APIに対して次の権限（スコープ）のみを要求します。</p>
+<ul>
+  <li><code>https://www.googleapis.com/auth/youtube.upload</code>（YouTubeへの動画アップロード）</li>
+</ul>
+<p>この権限は、運営者本人のYouTubeチャンネルへ番組音声をアップロードするためだけに使用します。視聴者情報・再生履歴・チャンネル分析データ・コメント等を取得することはなく、技術的にも取得できません。</p>
+<p>本アプリケーションによるGoogleユーザーデータの取得・利用は、<a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>（Limited Use 要件を含む）に準拠します。取得した情報を広告目的で利用したり、第三者へ販売・提供したりすることはありません。</p>
+
+<h2>4. 認証情報の管理</h2>
+<p>Google OAuthによって発行されたリフレッシュトークンは、GitHub Actions の暗号化シークレットとして保管され、番組生成の自動処理からのみ参照されます。値がログ・公開リポジトリ・配信物に出力されることはありません。</p>
+
+<h2>5. 第三者提供</h2>
+<p>運営者は、取得した情報を第三者へ提供・販売・共有しません。法令に基づく開示請求があった場合を除きます。</p>
+
+<h2>6. 本ポリシーの変更</h2>
+<p>本ポリシーの内容は予告なく変更されることがあります。変更後の内容は本ページに掲載した時点で有効となります。</p>
+
+<h2>7. お問い合わせ</h2>
+<p>本ポリシーおよび本番組に関するお問い合わせ先: <a href="mailto:emerouge.kei@gmail.com">emerouge.kei@gmail.com</a></p>
+
+<p class="foot">RADIOえめるーじぇ</p>
+</body>
+</html>
