@@ -850,6 +850,16 @@ class TestPromptSplitAndCache(unittest.TestCase):
             self.assertEqual(_count_cache_controls(kw), 2)
             self.assertEqual(kw["max_tokens"], 20000)
 
+    def test_effort_is_sent_only_when_configured(self) -> None:
+        _, calls, _ = _run_recorded([_resp(_good_payload("OCR"))])
+        self.assertNotIn("output_config", calls[0])
+        _, calls, _ = _run_recorded([_resp(_good_payload("OCR"))],
+                                    script_extra={"effort": "medium"})
+        self.assertEqual(calls[0]["output_config"], {"effort": "medium"})
+        _, calls, _ = _run_recorded([_resp(_good_payload("OCR"))],
+                                    script_extra={"effort": ""})
+        self.assertNotIn("output_config", calls[0])
+
     def test_retry_keeps_first_message_and_appends_plain_strings(self) -> None:
         recent = [{"date": "20260905", "term": "OCR"}]
         outcome, calls, _ = _run_recorded(

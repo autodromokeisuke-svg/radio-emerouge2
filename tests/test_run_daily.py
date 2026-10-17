@@ -29,6 +29,20 @@ from src.run_daily import (_apply_script_model_override, _uploads_disabled,
                            _validated_publish_from)
 
 
+class TestApplyScriptEffortOverride(unittest.TestCase):
+    def test_effort_env_sets_and_unset_keeps_default(self) -> None:
+        cfg = {"script": {"model": "m"}}
+        with patch.dict("os.environ", {}, clear=True):
+            _apply_script_model_override(cfg)
+        self.assertNotIn("effort", cfg["script"])
+        with patch.dict("os.environ", {"RADIO_SCRIPT_EFFORT": ""}, clear=True):
+            _apply_script_model_override(cfg)
+        self.assertNotIn("effort", cfg["script"])
+        with patch.dict("os.environ", {"RADIO_SCRIPT_EFFORT": "medium"}, clear=True):
+            _apply_script_model_override(cfg)
+        self.assertEqual(cfg["script"]["effort"], "medium")
+
+
 class TestApplyScriptModelOverride(unittest.TestCase):
     def test_env_var_unset_keeps_config_model(self) -> None:
         cfg = {"script": {"model": "claude-sonnet-4-6"}}

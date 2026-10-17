@@ -12,6 +12,10 @@ on:
         description: "台本生成に使うモデル名（config.yamlのscript.modelを上書き）"
         required: false
         default: "claude-sonnet-5"
+      effort:
+        description: "思考の深さ（low/medium/high/xhigh/max。空ならAPI既定）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -83,6 +87,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RADIO_SCRIPT_MODEL: ${{ github.event.inputs.model }}
+          RADIO_SCRIPT_EFFORT: ${{ github.event.inputs.effort }}
           RADIO_DISABLE_UPLOADS: "1"
           RADIO_DUMP_SCRIPT: "1"
         run: |
@@ -92,6 +97,7 @@ jobs:
           mkdir -p out
           {
             echo "model=${RADIO_SCRIPT_MODEL}"
+            echo "effort=${RADIO_SCRIPT_EFFORT:-default}"
             echo "elapsed_seconds=$((END_TS - START_TS))"
             echo "run_id=${GITHUB_RUN_ID}"
             echo "triggered_by=${GITHUB_ACTOR}"

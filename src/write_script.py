@@ -567,8 +567,12 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     last_err: Exception | None = None
     refusals: list[str] = []
     for attempt in range(_MAX_ATTEMPTS):
+        # script.effort（任意）が指定されたときだけ思考の深さを送る。未指定ならAPI既定
+        extra = ({"output_config": {"effort": script_cfg["effort"]}}
+                 if script_cfg.get("effort") else {})
         resp = client.messages.create(
             model=script_cfg["model"],
+            **extra,
             max_tokens=20000,  # 思考もmax_tokensを消費。16000では10/7・10/15・10/17に切断→再試行で台本が短くなった。非ストリーミングで安全な上限は約21,000
             system=system_blocks,
             messages=messages,

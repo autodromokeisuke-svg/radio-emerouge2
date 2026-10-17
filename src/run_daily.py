@@ -64,6 +64,11 @@ def _apply_script_model_override(cfg: dict) -> None:
     override = os.environ.get("RADIO_SCRIPT_MODEL")
     if override:
         cfg["script"]["model"] = override
+    # 思考の深さ（output_config.effort: low/medium/high/xhigh/max）。未設定なら
+    # APIの既定のまま（本番の挙動は不変）。台本が短くなる問題の検証用
+    effort = os.environ.get("RADIO_SCRIPT_EFFORT")
+    if effort:
+        cfg["script"]["effort"] = effort
 
 
 def _uploads_disabled() -> bool:
