@@ -1,0 +1,54 @@
+name: youtube-reupload
+
+# 公開済みの放送を、同じ音声・タイトル・説明でYouTubeへ上げ直す手動実行専用ワークフロー。
+# YouTube側で動画を誤って削除したときの復旧用。新しい動画ID・アップロード日になる。
+# 配信（gh-pagesへのデプロイ）やfeed・latest.jsonの書き換えは一切行わない。
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "上げ直す放送日（YYYYMMDD。例: 20261022）"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  reupload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: 過去エピソード取得（gh-pages）
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: site
+          persist-credentials: false
+
+      - name: Python準備
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: ffmpegの存在を保証
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: YouTubeへ上げ直す
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          UPLOAD_DATE: ${{ github.event.inputs.date }}
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          python tools/reupload_youtube.py --date "$UPLOAD_DATE" \
+            --base-url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
