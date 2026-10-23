@@ -251,3 +251,19 @@ class TestSpamFixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNormTitleHyphens(unittest.TestCase):
+    def test_hyphen_inside_a_word_is_not_a_source_separator(self) -> None:
+        # 語中のハイフン以降を出典扱いで削ると、別の記事が同じ記事になってしまう
+        self.assertNotEqual(_norm_title("GPT-5.5 is out"), _norm_title("GPT-4o launch today"))
+        self.assertNotEqual(_norm_title("Claude-3 を発表"), _norm_title("Claude-4 を発表"))
+
+    def test_source_suffix_with_spaces_is_still_stripped(self) -> None:
+        self.assertEqual(_norm_title("OpenAI、GPT-5を発表 - 日本経済新聞"),
+                         _norm_title("OpenAI、GPT-5を発表 - Yahoo!ニュース"))
+
+    def test_collect_keeps_articles_with_hyphenated_names(self) -> None:
+        r = _run(("f", [_entry("GPT-5.5 is out"), _entry("GPT-4o launch today"),
+                        _entry("Claude-3 を発表 AI")]))
+        self.assertEqual(len(r), 3)

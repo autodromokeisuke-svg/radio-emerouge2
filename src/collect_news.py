@@ -50,7 +50,10 @@ def _entry_epoch(entry: Any) -> float | None:
     return None
 
 
-_SOURCE_SUFFIX_RE = re.compile(r"[\s　]*[-–—][\s　]*[^-–—]{1,30}$")
+# 末尾の「 - 情報源名」。区切りの前後に空白が要る。空白を要求しないと「GPT-5.5 is out」と
+# 「GPT-4o launch today」の語中のハイフン以降が出典扱いで削られ、どちらも「gpt」になって
+# 別の記事が同じ記事として消える（2026-10-23発覚）
+_SOURCE_SUFFIX_RE = re.compile(r"[\s　]+[-–—][\s　]+[^-–—]{1,30}$")
 
 
 def _norm_title(title: str) -> str:
@@ -69,8 +72,6 @@ def _fold(text: str) -> str:
 
 _BLOCKED_FOLDED = tuple(_fold(t) for t in _BLOCKED_TITLE_TERMS)
 _SOURCE_PREFIX_RE = re.compile(r"^[\s　]*[-–—][\s　]*")
-# 出典名の推定に使う「 - 出典名」。区切りの前後に空白が要る（「GPT-5.5」等の語中のハイフンを出典扱いしない）
-_PUBLISHER_SUFFIX_RE = re.compile(r"[\s　]+[-–—][\s　]+[^-–—]{1,30}$")
 
 
 def _has_blocked_term(title: str) -> bool:
@@ -88,7 +89,7 @@ def _publisher(entry: Any, title: str) -> str:
     src = entry.get("source")
     name = src.get("title") if isinstance(src, dict) else None
     if not (name and str(name).strip()):
-        m = _PUBLISHER_SUFFIX_RE.search(title)
+        m = _SOURCE_SUFFIX_RE.search(title)
         name = _SOURCE_PREFIX_RE.sub("", m.group(0)) if m else ""
     return str(name).strip()
 
