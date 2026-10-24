@@ -14,7 +14,8 @@ from typing import Any
 from anthropic import Anthropic
 
 from .bgm import SECTION_ORDER, plan_spans
-from .glossary_terms import aliases_for, find_duplicate, find_similar, load_alias_groups
+from .glossary_terms import (aliases_for, find_duplicate, find_similar, load_alias_groups,
+                             normalize_term)
 from .holiday_jp import long_holiday_info
 
 JST = timezone(timedelta(hours=9))
@@ -295,6 +296,24 @@ def _resolve_used_news(data: dict[str, Any], news: list[dict[str, str]],
     return used
 
 
+def _term_in_news(term: str, used_news: list[dict[str, str]]) -> bool:
+    """用語が、扱ったニュースのタイトルまたは概要のどれかに含まれるか。
+
+    全角半角・大小・ひらカナ・空白・記号の揺れは normalize_term で吸収する。
+    normalize_term は空白を除くため、記事を連結してから正規化すると記事の境界をまたいだ
+    偽の一致が起きる。タイトル・概要のそれぞれを別々に正規化して判定する。
+    用語が空に正規化される場合（記号だけ等）は、何にでも含まれてしまうので一致扱いにしない。
+    """
+    norm_term = normalize_term(term)
+    if not norm_term:
+        return False
+    for n in used_news:
+        for field in ("title", "summary"):
+            if norm_term in normalize_term(n.get(field) or ""):
+                return True
+    return False
+
+
 def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]],
                          used_news: list[dict[str, str]]) -> list[str]:
     """「今日のひとこと用語」の妥当性を確認し、問題があれば説明文のリストを返す（例外は投げない）。
@@ -307,8 +326,7 @@ def _check_glossary_term(data: dict[str, Any], recent_terms: list[dict[str, str]
     if not term:
         return []
     problems = []
-    haystack = " ".join(f"{n.get('title', '')} {n.get('summary', '')}" for n in used_news).lower()
-    if term.lower() not in haystack:
+    if not _term_in_news(term, used_news):
         problems.append(f"「{term}」が本編で実際に扱ったニュースの中に見当たりません")
     # 重複判定は表記揺れ（全角/半角・大小・ひらカナ・英語名・略称）を吸収して行う。
     # recent_terms は公開開始日以降・全期間の履歴（run_daily が渡す）

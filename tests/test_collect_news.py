@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.collect_news import MAX_PER_PUBLISHER, _norm_title, collect, filter_recent
+from src.collect_news import (FLOOD_THRESHOLD, MAX_PER_PUBLISHER, _norm_title,
+                              _starts_with_zero_width, collect, filter_recent)
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "google_news_spam_2026-10-23.json"
+_FIXTURE_1024 = Path(__file__).resolve().parent / "fixtures" / "google_news_spam_2026-10-24.json"
 
 
 def _epoch_struct(hours_ago: float):
@@ -171,7 +173,7 @@ class TestBlockedTerms(unittest.TestCase):
 
 class TestPublisherCap(unittest.TestCase):
     def test_same_publisher_limited(self) -> None:
-        r = _run(("f", [_entry(f"AI記事{i}", "同じ社") for i in range(10)]))
+        r = _run(("f", [_entry(f"AI記事{i}", "同じ社") for i in range(8)]))
         self.assertEqual(len(r), MAX_PER_PUBLISHER)
         self.assertEqual([it["title"] for it in r], ["AI記事0", "AI記事1", "AI記事2"])
 
@@ -267,3 +269,135 @@ class TestNormTitleHyphens(unittest.TestCase):
         r = _run(("f", [_entry("GPT-5.5 is out"), _entry("GPT-4o launch today"),
                         _entry("Claude-3 を発表 AI")]))
         self.assertEqual(len(r), 3)
+
+
+class TestFloodDetection(unittest.TestCase):
+    def test_threshold_value(self) -> None:
+        self.assertEqual(FLOOD_THRESHOLD, 9)
+
+    def test_eight_from_same_publisher_still_capped_at_three(self) -> None:
+        r = _run(("f", [_entry(f"AI記事{i}", "同じ社") for i in range(8)]))
+        self.assertEqual(len(r), MAX_PER_PUBLISHER)
+
+    def test_nine_from_same_publisher_are_all_dropped(self) -> None:
+        r = _run(("f", [_entry(f"AI記事{i}", "同じ社") for i in range(9)]))
+        self.assertEqual(r, [])
+
+    def test_flood_drops_only_the_flooding_publisher(self) -> None:
+        spam = [_entry(f"AI記事{i}", "偽の自治体") for i in range(12)]
+        real = [_entry("AI新製品発表", "朝日新聞"), _entry("AI規制の動向", "日本経済新聞")]
+        r = _run(("f", spam + real))
+        self.assertEqual(sorted(it["title"] for it in r), ["AI新製品発表", "AI規制の動向"])
+
+    def test_flood_publisher_normalized(self) -> None:
+        names = ["Reuters", "ＲＥＵＴＥＲＳ", "reuters "] * 3
+        r = _run(("f", [_entry(f"AI記事{i}", n) for i, n in enumerate(names)]))
+        self.assertEqual(r, [])
+
+    def test_flood_by_title_suffix(self) -> None:
+        r = _run(("f", [_entry(f"AI記事{i} - 末尾社") for i in range(9)]))
+        self.assertEqual(r, [])
+
+    def test_counted_per_feed_not_across_feeds(self) -> None:
+        # 5件+5件(同一出典)は、フィードごとに数えるので洪水にならず、通算3件まで残る
+        r = _run(("f1", [_entry(f"AI記事A{i}", "同じ社") for i in range(5)]),
+                 ("f2", [_entry(f"AI記事B{i}", "同じ社") for i in range(5)]))
+        self.assertEqual(len(r), MAX_PER_PUBLISHER)
+
+    def test_cross_feed_total_over_threshold_is_not_flood(self) -> None:
+        # 1件+8件=計9件でも、どのフィードも9件未満なので洪水にならない（通算上限3件まで残る）
+        r = _run(("f1", [_entry("AI記事A0", "同じ社")]),
+                 ("f2", [_entry(f"AI記事B{i}", "同じ社") for i in range(8)]))
+        self.assertEqual(len(r), MAX_PER_PUBLISHER)
+
+    def test_flood_in_one_feed_does_not_affect_other_feed(self) -> None:
+        r = _run(("f1", [_entry(f"AI記事A{i}", "同じ社") for i in range(9)]),
+                 ("f2", [_entry(f"AI記事B{i}", "同じ社") for i in range(2)]))
+        self.assertEqual([it["title"] for it in r], ["AI記事B0", "AI記事B1"])
+
+    def test_unidentified_publisher_is_never_flood(self) -> None:
+        r = _run(("f", [_entry(f"AI記事{i}") for i in range(20)]))
+        self.assertEqual(len(r), 20)
+
+    def test_old_entries_do_not_count_toward_flood(self) -> None:
+        # 日付フィルタ後に数える：26時間より古い記事は数に入らない
+        old = [_entry(f"AI旧記事{i}", "同じ社") for i in range(10)]
+        for e in old:
+            e["published_parsed"] = _epoch_struct(48)
+        new = [_entry(f"AI新記事{i}", "同じ社") for i in range(5)]
+        r = _run(("f", new + old))
+        self.assertEqual(len(r), MAX_PER_PUBLISHER)
+
+    def test_entries_failing_keyword_filter_count_toward_flood(self) -> None:
+        # keyword_filter より前に数える：キーワードに合わない記事も数に入る
+        spam = [_entry(f"無関係な記事{i}", "偽の自治体", summary="") for i in range(8)]
+        ai = [_entry("AIの記事", "偽の自治体")]
+        r = _run(("f", spam + ai))
+        self.assertEqual(r, [])
+
+
+class TestLeadingZeroWidth(unittest.TestCase):
+    def _titles(self, titles: list[str]) -> list[str]:
+        r = _run(("f", [_entry(t, f"出典{i}") for i, t in enumerate(titles)]))
+        return [it["title"] for it in r]
+
+    def test_leading_zero_width_chars_are_dropped(self) -> None:
+        for z in ("‍", "​", "‌", "⁠", "﻿"):
+            self.assertEqual(self._titles([f"{z}AI画像の話"]), [], repr(z))
+
+    def test_helper_ignores_leading_whitespace_only(self) -> None:
+        self.assertTrue(_starts_with_zero_width("  　‍AI"))
+        self.assertFalse(_starts_with_zero_width("  AI‍"))
+        self.assertFalse(_starts_with_zero_width(""))
+        self.assertFalse(_starts_with_zero_width("   "))
+
+    def test_leading_multiple_zwj_dropped(self) -> None:
+        self.assertEqual(self._titles(["‍‍‍生成 ai 画像 生成"]), [])
+
+    def test_whitespace_then_zwj_is_dropped(self) -> None:
+        self.assertEqual(self._titles(["  ‍AI画像の話"]), [])
+
+    def test_zwj_in_middle_is_kept(self) -> None:
+        t = "AIが描く👨‍💻 エンジニア"
+        self.assertEqual(self._titles([t]), [t])
+
+    def test_trailing_zero_width_is_kept(self) -> None:
+        t = "AIの最新動向‍"
+        self.assertEqual(self._titles([t]), [t])
+
+    def test_emoji_zwj_sequence_at_title_start_is_kept(self) -> None:
+        # 先頭が絵文字そのもの（ZWJは語中）なら除外しない
+        t = "👨‍💻 AIエンジニアの一日"
+        self.assertEqual(self._titles([t]), [t])
+
+
+class TestSpamFixture1024(unittest.TestCase):
+    def setUp(self) -> None:
+        d = json.loads(_FIXTURE_1024.read_text(encoding="utf-8"))
+        self.entries = [{**e, "source": {"title": e["source"]},
+                         "published_parsed": _epoch_struct(0.05)} for e in d["entries"]]
+        self.result = _run(("Google ニュース", self.entries))
+
+    def test_shodoshima_and_zero_width_all_gone(self) -> None:
+        self.assertTrue(self.result)
+        for it in self.result:
+            self.assertNotIn("小豆島町", it["title"])
+            self.assertNotIn("‍", it["title"])
+            self.assertNotEqual(it["title"].lstrip()[:1], "‍")
+
+    def test_real_publishers_not_dropped(self) -> None:
+        # keyword_filter("ai")を通る小豆島町以外の記事（先頭40件が対象）
+        real = [e for e in self.entries[:40] if e["source"]["title"] != "小豆島町"
+                and "ai" in f"{e['title']} {e['summary']}".lower()]
+        self.assertTrue(real)
+        kept = {it["title"] for it in self.result}
+        for e in real:
+            self.assertIn(e["title"][:120], kept, e["title"])
+        self.assertEqual(len(self.result), len(real))
+
+    def test_1023_fixture_still_clean(self) -> None:
+        d = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+        entries = [{**e, "source": {"title": e["source"]},
+                    "published_parsed": _epoch_struct(0.05)} for e in d["entries"]]
+        r = _run(("Google ニュース", entries))
+        self.assertEqual(sum(it["title"].endswith("北陸地方整備局") for it in r), 0)

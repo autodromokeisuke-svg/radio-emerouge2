@@ -181,6 +181,81 @@ class TestCheckGlossaryTerm(unittest.TestCase):
         self.assertEqual(len(buf.getvalue().strip().splitlines()), 1)
 
 
+class TestGlossaryGroundingNormalization(unittest.TestCase):
+    """「本編のニュースに見当たらない」検査の表記揺れ吸収（2026-10-24）。
+    全角半角・空白・記号の揺れで不一致になり、台本の再生成（約0.17ドル/回）を招いていた。"""
+
+    @staticmethod
+    def _problems(term: str, *titles: str, summary: str = "") -> list[str]:
+        news = [{"title": t, "summary": summary} for t in titles]
+        return _check_glossary_term({"glossary_term": term}, [], news)
+
+    def _assert_grounded(self, term: str, *titles: str, summary: str = "") -> None:
+        problems = self._problems(term, *titles, summary=summary)
+        self.assertFalse(any("見当たりません" in p for p in problems), (term, titles, problems))
+
+    def _assert_not_grounded(self, term: str, *titles: str, summary: str = "") -> None:
+        problems = self._problems(term, *titles, summary=summary)
+        self.assertTrue(any("見当たりません" in p for p in problems), (term, titles, problems))
+
+    def test_fullwidth_halfwidth_variants_match(self) -> None:
+        self._assert_grounded("AIエージェント", "ＡＩエージェントが急増")
+        self._assert_grounded("GPT-5", "新モデルGPT５を発表")
+        self._assert_grounded("Claude Code", "ClaudeCodeが更新")
+        self._assert_grounded("Claude Code", "Claude　Codeが更新")
+        self._assert_grounded("Claude Code", "CLAUDE CODE が更新")
+
+    def test_hiragana_katakana_variants_match(self) -> None:
+        self._assert_grounded("マルチモーダル", "まるちもーだるAIが登場")
+        self._assert_grounded("ふぃじかるAI", "フィジカルAIの最前線")
+
+    def test_match_in_summary_also_counts(self) -> None:
+        self._assert_grounded("AIエージェント", "見出しは無関係", summary="ＡＩ エージェントの話")
+
+    def test_unrelated_term_is_still_flagged(self) -> None:
+        self._assert_not_grounded("量子コンピュータ", "ＡＩエージェントが急増", "GPT５を発表")
+
+    def test_one_character_difference_is_not_rescued(self) -> None:
+        """限界の明示: 「製」の1文字違いは正規化では救えない（救えなくてよい）。
+        全角半角の揺れ(ＡＩ)だけが正規化で吸収される範囲。"""
+        self._assert_not_grounded("サードパーティーAIエージェント", "サードパーティー製ＡＩエージェントを発表")
+        # 「製」が無ければ全角ＡＩでも一致する（吸収できるのは表記の揺れだけ）
+        self._assert_grounded("サードパーティーAIエージェント", "サードパーティーＡＩエージェントを発表")
+
+    def test_match_does_not_span_article_boundaries(self) -> None:
+        """記事Aの末尾「サード」と記事Bの先頭「パーティー」で偽の一致をしない。"""
+        self._assert_not_grounded("サードパーティー", "新サービスはサード", "パーティー会場の最新事情")
+        # タイトルと概要の境界、概要と次の記事のタイトルの境界も同様
+        news = [{"title": "新サービスはサード", "summary": "パーティー会場の話"},
+                {"title": "パーティーが開かれた", "summary": ""}]
+        problems = _check_glossary_term({"glossary_term": "サードパーティー"}, [], news)
+        self.assertTrue(any("見当たりません" in p for p in problems))
+        # 同じ記事の中に連続して現れるなら一致する
+        self._assert_grounded("サードパーティー", "無関係な記事", "サード パーティー対応を拡大")
+
+    def test_symbol_only_term_is_never_a_match(self) -> None:
+        for term in ["！？", "・・・", "「」", "（ ）", "--"]:
+            with self.subTest(term=term):
+                self._assert_not_grounded(term, "ＡＩエージェント！？・・・「」", summary="--（ ）")
+
+    def test_blank_term_has_no_problems(self) -> None:
+        self.assertEqual(self._problems("", "ＡＩ"), [])
+        self.assertEqual(self._problems("   ", "ＡＩ"), [])
+
+    def test_missing_title_or_summary_does_not_crash(self) -> None:
+        news = [{"title": None, "summary": None}, {}, {"title": "ＡＩエージェント"}]
+        problems = _check_glossary_term({"glossary_term": "AIエージェント"}, [], news)
+        self.assertEqual(problems, [])
+
+    def test_duplicate_check_is_unchanged(self) -> None:
+        recent = [{"date": "20260901", "term": "AIエージェント"}]
+        problems = _check_glossary_term({"glossary_term": "ＡＩエージェント"}, recent,
+                                        [{"title": "ＡＩエージェント", "summary": ""}])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("2026-09-01", problems[0])
+        self.assertNotIn("見当たりません", problems[0])
+
+
 class TestGlossaryDuplicateRegression(unittest.TestCase):
     """2026-10-01実発生の再発防止。10/1放送の「今日のひとこと」が「フィジカルAI」で、
     9/1放送分と重複した（30日窓から落ちたため）。実データと同じ形の履歴で、
