@@ -18,6 +18,7 @@ import html
 import json
 import os
 import shutil
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -326,6 +327,87 @@ def record_used_news(site: Path, date_key: str, items: list[dict[str, str]]) -> 
             continue
         if dt >= cutoff:
             kept.append(e)
+    kept.sort(key=lambda e: e["date"])
+
+    _write_json_atomic(path, kept)
+
+
+def _character_fact_key(fact: str) -> str:
+    """設定が既出かどうかを比べるためのキー（NFKC＋前後空白除去）。write_script._fact_key と同じ規則。"""
+    return unicodedata.normalize("NFKC", str(fact)).strip()
+
+
+def load_character_additions(site: Path, exclude_date: str | None = None) -> list[dict[str, str]]:
+    """site/character_sheet_additions.json から、キャラ設定シートの追加分を返す。
+
+    追加分は、放送の中で新しく出た設定を照合チェックが抜き出して記録したもの。シート本体
+    （assets/character_sheet.yaml）と合わせて、台本生成AIと照合チェックに渡す。
+    各要素は {"date": "20261005", "who": "eme"|"ruje"|"both", "fact": str} の形で、
+    ファイルの並び（日付の昇順）のまま返す。
+    exclude_date（YYYYMMDD）と同じ日付の項目は除く。同じ日の再実行は号を上書きするので、
+    上書きされる前の放送で出た設定を、今回の台本の「確定した設定」として渡さないため。
+    ファイルが無い/壊れている（文字コード不正・BOM付きは読める）場合は空リストを返す
+    （例外を投げない）。日付や fact が不正な項目は読み飛ばす。
+    """
+    path = site / "character_sheet_additions.json"
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):   # JSONDecodeError・UnicodeDecodeError は ValueError
+        return []
+    if not isinstance(entries, list):
+        return []
+    result = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        date, who, fact = e.get("date", ""), e.get("who", ""), e.get("fact", "")
+        if not isinstance(date, str) or not isinstance(fact, str) or not fact.strip():
+            continue
+        try:
+            datetime.strptime(date, "%Y%m%d")
+        except ValueError:
+            continue
+        if exclude_date and date == exclude_date:
+            continue
+        result.append({"date": date, "who": who if isinstance(who, str) else "",
+                       "fact": fact.strip()})
+    return result
+
+
+def record_character_additions(site: Path, date_key: str, facts: list[dict[str, str]]) -> None:
+    """今回の放送で新しく出た設定を site/character_sheet_additions.json に記録する。
+
+    facts は [{"who": "eme"|"ruje"|"both", "fact": str}, ...]（write_script が返す
+    character_additions）。同じdate_keyの既存エントリは先に消してから追記する（同日の
+    再実行は号を上書きするので、前の実行で出た設定を残さない）。facts が空でも同日分の
+    削除は行う。他の日付と fact が同じもの（NFKC＋前後空白除去）は足さない。
+    履歴は無期限に保持する（追加分は人が見直してシート本体へ移すまで消さない）。
+    日付が不正なエントリのみ落とし、日付の昇順（同日内は追記順）に並べて保存する。
+    """
+    path = site / "character_sheet_additions.json"
+    entries = _read_history_for_update(path)
+
+    entries = [e for e in entries if isinstance(e, dict) and e.get("date") != date_key]
+    kept = []
+    for e in entries:
+        date = e.get("date", "")
+        if not isinstance(date, str):
+            continue
+        try:
+            datetime.strptime(date, "%Y%m%d")
+        except ValueError:
+            continue
+        kept.append(e)
+    known = {_character_fact_key(e["fact"]) for e in kept if isinstance(e.get("fact"), str)}
+
+    for f in facts:
+        fact = f.get("fact") if isinstance(f, dict) else None
+        if not isinstance(fact, str) or not fact.strip() or _character_fact_key(fact) in known:
+            continue
+        known.add(_character_fact_key(fact))
+        who = f.get("who")
+        kept.append({"date": date_key, "who": who if isinstance(who, str) else "",
+                     "fact": fact.strip()})
     kept.sort(key=lambda e: e["date"])
 
     _write_json_atomic(path, kept)

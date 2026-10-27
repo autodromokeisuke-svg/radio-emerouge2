@@ -7,16 +7,19 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from anthropic import Anthropic
+import yaml
+from anthropic import Anthropic, BadRequestError
 
 from .bgm import SECTION_ORDER, plan_spans
 from .glossary_terms import (aliases_for, find_duplicate, find_similar, load_alias_groups,
                              normalize_term)
 from .holiday_jp import long_holiday_info
+from .reading_check import _extract_first_json_object
 
 JST = timezone(timedelta(hours=9))
 # プロンプトは2分割。固定部（毎日同一。API の system に入れ、プロンプトキャッシュの接頭辞にする）と、
@@ -26,6 +29,10 @@ JST = timezone(timedelta(hours=9))
 # 変えない構造にしておくこと（固定部に日付やニュースなど日ごとの値を混ぜない）。
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "assets" / "prompt_script.md"
 DAILY_PROMPT_PATH = Path(__file__).resolve().parent.parent / "assets" / "prompt_daily.md"
+# オープニングの雑談のお題（放送日ごとに1つ）と、キャラ設定シート本体。どちらも assets 配下。
+# シートは固定部（system）に入れるので、日ごとに変わる値（追加分・設定変更の案内）は混ぜない
+BANTER_TOPICS_PATH = Path(__file__).resolve().parent.parent / "assets" / "banter_topics.yaml"
+CHARACTER_SHEET_PATH = Path(__file__).resolve().parent.parent / "assets" / "character_sheet.yaml"
 
 SYSTEM = (
     "あなたは日本語ラジオ番組の放送作家です。"
@@ -143,6 +150,127 @@ def _holiday_block(now: datetime | None = None) -> str:
             .replace("{end}", _holiday_date_label(info["end"])))
 
 
+# 話す人の表示名（雑談のお題の「話を振る人」と、照合に渡す台本の話者表記）
+_SPEAKER_LABEL = {"eme": "エメ", "ruje": "ルジェ"}
+
+# キャラ設定シートの節（YAMLのキー, プロンプトに出す見出し）。_render_character_sheet が上から順に出す。
+# changes（設定変更の履歴）は別扱い（_character_change_block）なので、ここには含めない
+_CHARACTER_SECTIONS = [
+    ("eme", "エメ"),
+    ("ruje", "ルジェ"),
+    ("both", "ふたり"),
+    ("past_only", "過去の放送で話したが、今後は自分から話題にしない設定（聞かれても否定はしない）"),
+    ("not_mentioned", "決めていないこと（番組では触れない）"),
+]
+# changes の who の表示名
+_CHARACTER_WHO_LABEL = {"eme": "エメ", "ruje": "ルジェ", "both": "ふたり"}
+
+# 設定を変える日（シートの changes の date が今日）だけプロンプトに差し込む指示ブロック。
+# 通常日は空文字。変更内容の箇条書き（- エメ: 「変更前」→「変更後」）は _character_change_block が後ろに足す
+_CHARACTER_CHANGE_BLOCK = """## 設定変更の案内（本日限定）
+今日から次の設定が変わる。オープニングかニュースの合間で、もう一方が「あれ？前は〇〇って言ってなかったっけ？」と気づき、本人が理由を一言で説明する掛け合いを入れること（1〜2往復）。このやり取りに限り、過去に言っていたことに触れてよい。
+"""
+
+
+def _load_banter_topics() -> list[dict[str, str]]:
+    """assets/banter_topics.yaml のお題一覧（各要素 {"lead": "eme"|"ruje", "topic": str}）を返す。
+
+    形式が不正（topics が無い・空、lead が eme/ruje 以外、topic が空）なら、PROMPT_PATH の
+    読み込みと同じく黙って続行せず ValueError にする（お題が出ないまま放送すると、
+    マンネリ対策が効かなくなるため。同じ形式検査を tests/test_write_script.py もしている）。
+    """
+    data = yaml.safe_load(BANTER_TOPICS_PATH.read_text(encoding="utf-8"))
+    topics = data.get("topics") if isinstance(data, dict) else None
+    if not isinstance(topics, list) or not topics:
+        raise ValueError(f"{BANTER_TOPICS_PATH.name} の形式が不正です（topics のリストがありません）")
+    result = []
+    for i, t in enumerate(topics, 1):
+        lead = t.get("lead") if isinstance(t, dict) else None
+        topic = t.get("topic") if isinstance(t, dict) else None
+        if (not isinstance(lead, str) or lead not in _SPEAKER_LABEL
+                or not isinstance(topic, str) or not topic.strip()):
+            raise ValueError(f"{BANTER_TOPICS_PATH.name} の{i}件目が不正です"
+                             "（lead は eme / ruje、topic は空でない文字列にしてください）")
+        result.append({"lead": lead, "topic": topic.strip()})
+    return result
+
+
+def _banter_block(now: datetime | None = None) -> str:
+    """今日（JST）のオープニング用「雑談のお題」の指示ブロックを返す。
+
+    お題は、放送日 d（JST）の通し日数 d.toordinal() をお題の件数で割った余りで選ぶ。
+    日付だけで決まるので、同じ日は何度実行しても同じお題になり、1日1つ番号順に進んで、
+    最後まで行ったら先頭に戻る。件数が7の倍数だと同じお題が毎回同じ曜日に来てしまうため、
+    yaml 側は7の倍数にしない（その旨は yaml の先頭コメントにも書いてある）。
+    """
+    now = now or datetime.now(JST)
+    if now.tzinfo is not None:
+        now = now.astimezone(JST)
+    topics = _load_banter_topics()
+    item = topics[now.date().toordinal() % len(topics)]
+    return ("## 今日の雑談のお題（オープニングのワンシーン用）\n"
+            f"- お題: {item['topic']}\n"
+            f"- 話を振る人: {_SPEAKER_LABEL[item['lead']]}\n")
+
+
+def _load_character_sheet() -> dict[str, Any]:
+    """assets/character_sheet.yaml（キャラ設定シート本体）を読んで返す。
+
+    各節（eme / ruje / both / past_only / not_mentioned / changes）はリスト。キーが無い・空の
+    節は許す。辞書でない、または節がリストでない場合は _load_banter_topics と同じ理由で ValueError。
+    """
+    data = yaml.safe_load(CHARACTER_SHEET_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{CHARACTER_SHEET_PATH.name} の形式が不正です（キーと値の辞書ではありません）")
+    for key in [k for k, _ in _CHARACTER_SECTIONS] + ["changes"]:
+        if data.get(key) is not None and not isinstance(data[key], list):
+            raise ValueError(f"{CHARACTER_SHEET_PATH.name} の {key} がリストではありません")
+    return data
+
+
+def _render_character_sheet(sheet: dict[str, Any]) -> str:
+    """キャラ設定シートを、固定部（system）に埋め込むテキストにする。
+
+    節ごとに「### 見出し」＋「- 項目」を並べる。項目が空の節は出さない。出典メモなどの
+    YAMLコメントは読み込み時に落ちているので、プロンプトには出ない。
+    """
+    blocks = []
+    for key, heading in _CHARACTER_SECTIONS:
+        items = [str(i).strip() for i in (sheet.get(key) or []) if str(i).strip()]
+        if items:
+            blocks.append(f"### {heading}\n" + "\n".join(f"- {i}" for i in items))
+    return "\n\n".join(blocks)
+
+
+def _character_change_block(sheet: dict[str, Any], now: datetime | None = None) -> str:
+    """今日（JST）が、シートの changes に書かれた設定変更の日なら、その案内ブロックを返す。
+
+    該当する changes が無い日は空文字。その日の放送だけ、エメかルジェが「あれ？前は〇〇って
+    言ってなかったっけ？」と気づいて理由を説明する掛け合いを入れさせる。今日の日付で
+    項目が不正（who が eme/ruje/both 以外、before/after が空）なら警告してその項目だけ除く。
+    """
+    now = now or datetime.now(JST)
+    if now.tzinfo is not None:
+        now = now.astimezone(JST)
+    today_key = now.strftime("%Y%m%d")
+    bullets = []
+    for c in sheet.get("changes") or []:
+        # YAML で引用符なしの 20261105 は整数になるので、文字列にしてから比べる
+        if not isinstance(c, dict) or str(c.get("date", "")).strip() != today_key:
+            continue
+        who_key = c.get("who")
+        who = _CHARACTER_WHO_LABEL.get(who_key) if isinstance(who_key, str) else None
+        before, after = str(c.get("before") or "").strip(), str(c.get("after") or "").strip()
+        if not who or not before or not after:
+            print(f"[warn] キャラ設定シートの changes に不正な項目があるため、設定変更の案内から除きました"
+                  f"（date={today_key}。who は eme/ruje/both、before/after は必須）")
+            continue
+        bullets.append(f"- {who}: 「{before}」→「{after}」")
+    if not bullets:
+        return ""
+    return _CHARACTER_CHANGE_BLOCK + "\n".join(bullets) + "\n"
+
+
 def _tomorrow_label() -> str:
     """次回放送日（＝翌日）の曜日を日本語表記で返す（例: 土曜日）。
 
@@ -231,6 +359,20 @@ def _format_recent_news_block(recent_news: list[dict[str, str]]) -> str:
             date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
         lines.append(f"- {date}: {t.get('title', '')}")
     return "\n".join(lines)
+
+
+def _format_character_additions_block(additions: list[dict[str, str]]) -> str:
+    """キャラ設定シートの追加分（これまでの放送で新しく出た設定）を「- 設定」の箇条書きにする。
+
+    日付は出さない（シート本体と同じく「ふたりがもともと知っている設定」として守らせるため）。
+    1項目は必ず1行にする（改行を含むと、箇条書きの外にプロンプトの指示が紛れ込めてしまう）。
+    """
+    lines = []
+    for a in additions:
+        fact = " ".join(str(a.get("fact") or "").split()) if isinstance(a, dict) else ""
+        if fact:
+            lines.append(f"- {fact}")
+    return "\n".join(lines) if lines else "（まだ無し）"
 
 
 # パーソナリティ（エメ・ルジェ）が自分の正体（使用AIモデル・「中の人」）に一人称で言及していないかの検出。
@@ -466,6 +608,149 @@ def _check_glossary_topic_safety(term: str, news: list[dict[str, str]], model: s
         return []
 
 
+# 台本とキャラ設定シートの照合プロンプト。{sheet}{additions}{change}{lines} を埋める
+# （JSON例の波かっこは str.format 用に二重にしてある）
+_CHARACTER_CHECK_PROMPT = """あなたはラジオ番組の台本チェック係です。指定されたJSON形式のみを出力し、それ以外の文字を一切出力しません。
+
+次は、ラジオ番組のパーソナリティ「エメ」と「ルジェ」のキャラ設定シートと、今日の台本です。
+
+## キャラ設定シート（本体）
+{sheet}
+
+## キャラ設定シートの追加分（これまでの放送で新しく出た設定）
+{additions}
+
+## 今日の設定変更
+{change}
+
+## 今日の台本（番号. 話す人: セリフ）
+{lines}
+
+次の3つを調べてください。
+1. contradictions: シート（本体・追加分）と矛盾するセリフ。例: シートで「朝の一杯はあったかいお茶」なのに「毎朝コーヒーを飲む」と言う。「決めていないこと」にある項目（家族・ペット・住まい・年齢・経歴）を具体的に話しているセリフもここに入れる。「今日の設定変更」に書かれた変更を説明するやり取りの中の「前は〜だった」という発言は矛盾ではない。
+2. banned: 「過去の放送で話したが、今後は自分から話題にしない設定」を話題にしているセリフ（エメがルジェにメッセージや連絡を何度も送った話、朝から待ちきれずに連絡した話など）。
+3. new_facts: シート（本体・追加分）に無い、エメ・ルジェ自身やふたりの関係についての新しい設定で、次の放送以降も変わらないはずのもの（好き嫌い・趣味・習慣・考え方・持ち物・ふたりの思い出など）。シートと矛盾するものは new_facts に入れず contradictions に入れる。シートに同じ意味のものがすでにあれば入れない。
+
+次は対象外です（どれにも入れない）:
+- ニュースへの感想・意見、その日の出来事や気分（「今朝は寝坊した」など）
+- クイズ・ゲーム・空想・役になりきる遊び・冗談の中の発言
+- リスナーへの呼びかけや一般論
+
+new_facts の fact は「エメは〜」「ルジェは〜」「ふたりは〜」の形で、40文字以内で簡潔に書いてください。who は eme / ruje / both のいずれかです。
+
+出力形式（このJSONだけ。説明文やコードフェンスは不要。該当なしの項目は空のリスト）:
+{{"contradictions": [{{"index": 12, "reason": "理由"}}], "banned": [{{"index": 5, "reason": "理由"}}], "new_facts": [{{"who": "eme", "fact": "エメは〜", "index": 30}}]}}
+"""
+
+# 照合の出力上限。思考（adaptive）も max_tokens を消費する
+_CHARACTER_CHECK_MAX_TOKENS = 16000
+# new_facts の fact の最大文字数（プロンプトでは40文字以内と指示している。それより長いものは
+# 「設定」ではなく感想や出来事の可能性が高いので捨てる）
+_CHARACTER_FACT_MAX_LEN = 60
+
+
+def _fact_key(text: str) -> str:
+    """設定が既出かどうかを比べるためのキー（NFKC＋前後空白除去）。"""
+    return unicodedata.normalize("NFKC", str(text)).strip()
+
+
+def _check_character_consistency(lines: list[dict[str, str]], sheet_text: str, additions_text: str,
+                                 change_text: str, model: str
+                                 ) -> tuple[list[str], list[dict[str, str]]]:
+    """台本をキャラ設定シートと照合し、(書き直し用の指摘, 新しく出た設定) を返す。例外は投げない。
+
+    AIを1回呼び、次の3つを調べさせる（プロンプトは _CHARACTER_CHECK_PROMPT）。
+      - 矛盾: シート（本体・追加分）と食い違うセリフ
+      - 禁止ネタ: 「今後は自分から話題にしない設定」を話題にしているセリフ
+      - 新しい設定: シートに無く、次回以降も守らせたいふたりの設定
+    1つ目の戻り値は「N行目: ...」形式の指摘文（リトライのヒント文に使う）。2つ目は
+    {"who": "eme"|"ruje"|"both", "fact": str} のリストで、放送後に run_daily が
+    site/character_sheet_additions.json へ追記する。who が不正・fact が空か長すぎるもの、
+    シート本体・追加分と（NFKC＋前後空白除去で）同じものは除く。
+
+    読み検証が思考なしで空振りした反省から、思考（adaptive）を有効にして呼ぶ
+    （claude-sonnet-4-6 は明示しないと思考しない）。思考の指定が 400 で拒否されるモデルなら、
+    思考なしで1回だけ呼び直す。temperature 等のサンプリング引数は付けない（2026-10-21以降は400）。
+
+    fail-soft: API呼び出しやJSON解析の失敗、応答が完了していない（max_tokens / refusal）場合は、
+    警告を表示して ([], []) を返す（放送を止めない）。ログにはセリフの行全体を出さず、
+    行番号と切り詰めた理由だけを出す。
+    """
+    try:
+        numbered = "\n".join(
+            f"{i}. {_SPEAKER_LABEL.get(ln.get('speaker'), '')}: {ln.get('text', '')}"
+            for i, ln in enumerate(lines, 1))
+        prompt = _CHARACTER_CHECK_PROMPT.format(
+            sheet=sheet_text, additions=additions_text,
+            change=change_text.strip() or "（なし）", lines=numbered)
+        client = Anthropic()
+        request = {"model": model, "max_tokens": _CHARACTER_CHECK_MAX_TOKENS,
+                   "messages": [{"role": "user", "content": prompt}]}
+        try:
+            resp = client.messages.create(**request, thinking={"type": "adaptive"})
+        except BadRequestError:
+            resp = client.messages.create(**request)
+        stop_reason = getattr(resp, "stop_reason", None)
+        if stop_reason in ("max_tokens", "refusal"):
+            print(f"[warn] キャラ照合: 応答が完了していないため結果を使いません (stop_reason={stop_reason})")
+            return [], []
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        data = _extract_first_json_object(text)
+
+        def flagged(key: str) -> list[tuple[int, str]]:
+            """contradictions / banned の (行番号, 理由)。行番号が台本の範囲外のものは捨てる。"""
+            raw = data.get(key)
+            found = []
+            for item in raw if isinstance(raw, list) else []:
+                idx = item.get("index") if isinstance(item, dict) else None
+                if isinstance(idx, int) and not isinstance(idx, bool) and 1 <= idx <= len(lines):
+                    reason = item.get("reason")
+                    found.append((idx, reason.strip() if isinstance(reason, str) else ""))
+            return found
+
+        contradictions, banned = flagged("contradictions"), flagged("banned")
+        problems = [f"{idx}行目: キャラ設定シートと矛盾" + (f"（{reason}）" if reason else "")
+                    for idx, reason in contradictions]
+        problems += [f"{idx}行目: 話題にしない設定を話題にしている" + (f"（{reason}）" if reason else "")
+                     for idx, reason in banned]
+
+        # シート本体・追加分に既にある項目（「- 項目」の行）と同じものは、新しい設定にしない
+        known = set()
+        for block in (sheet_text, additions_text):
+            for line in block.splitlines():
+                line = line.strip()
+                known.add(_fact_key(line[2:] if line.startswith("- ") else line))
+        new_facts = []
+        raw_facts = data.get("new_facts")
+        for item in raw_facts if isinstance(raw_facts, list) else []:
+            if not isinstance(item, dict):
+                continue
+            who, fact = item.get("who"), item.get("fact")
+            if not isinstance(who, str) or who not in _CHARACTER_WHO_LABEL or not isinstance(fact, str):
+                continue
+            fact = fact.strip()
+            if not fact or len(fact) > _CHARACTER_FACT_MAX_LEN or _fact_key(fact) in known:
+                continue
+            known.add(_fact_key(fact))
+            new_facts.append({"who": who, "fact": fact})
+
+        usage = getattr(resp, "usage", None)
+
+        def tokens(name: str) -> str:
+            n = getattr(usage, name, None)
+            return str(n) if isinstance(n, int) and not isinstance(n, bool) else "?"
+
+        print(f"[ok] キャラ照合: 矛盾{len(contradictions)}件 / 禁止ネタ{len(banned)}件 / "
+              f"新しい設定{len(new_facts)}件 / 入力{tokens('input_tokens')}トークン / "
+              f"出力{tokens('output_tokens')}トークン")
+        for idx, reason in contradictions + banned:
+            print(f"[warn] キャラ照合: {idx}行目 {reason[:60]}")
+        return problems, new_facts
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] キャラ照合に失敗（そのまま続行）: {e}")
+        return [], []
+
+
 def _validate(data: dict[str, Any]) -> dict[str, Any]:
     lines = data.get("lines", [])
     if not isinstance(lines, list) or len(lines) < 8:
@@ -542,7 +827,8 @@ def _refusal_category(resp: Any) -> str:
 def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
                  minutes: int, recent_terms: list[dict[str, str]] | None = None,
                  recent_news: list[dict[str, str]] | None = None,
-                 show_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+                 show_cfg: dict[str, Any] | None = None,
+                 character_additions: list[dict[str, str]] | None = None) -> dict[str, Any]:
     target_chars = minutes * int(script_cfg.get("chars_per_minute", 320))
 
     # 参照可能な放送履歴＝公開日(show.publish_from)以降のみ。呼び出し側でも
@@ -553,12 +839,23 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
     recent_news = _drop_before_publish(recent_news or [], publish_from,
                                        "ニュース履歴")
 
+    # キャラ設定シート本体は固定部（system）へ。追加分と設定変更の案内は日ごとに変わるので可変部へ。
+    # 照合チェック（_check_character_consistency）にも同じ文面を渡す
+    character_sheet = _load_character_sheet()
+    sheet_text = _render_character_sheet(character_sheet)
+    additions_text = _format_character_additions_block(character_additions or [])
+    change_text = _character_change_block(character_sheet)
+    # 照合だけ別モデルを使いたい場合は config.yaml の script.character_check_model で指定する
+    # （未設定なら台本生成と同じモデル）
+    check_model = script_cfg.get("character_check_model") or script_cfg["model"]
+
     # system＝固定部（日ごとに変わる値を絶対に混ぜない。キャッシュ効果の実態は冒頭のコメント参照）
     system_text = SYSTEM + "\n\n" + PROMPT_PATH.read_text(encoding="utf-8").format(
         minutes=minutes,
         target_chars=target_chars,
         max_news=script_cfg.get("max_news", 4),
         news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 14),
+        character_sheet=sheet_text,
     )
     # user（1通目）＝可変部（放送日・履歴・ニュース候補など毎日変わる入力）
     daily_text = DAILY_PROMPT_PATH.read_text(encoding="utf-8").format(
@@ -567,9 +864,12 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
         debut_block=_debut_block(show_cfg),
         bgm_intro_block=_bgm_intro_block(show_cfg),
         holiday_block=_holiday_block(),
+        character_change_block=change_text,
+        banter_block=_banter_block(),
         news_reuse_avoid_days=script_cfg.get("news_reuse_avoid_days", 14),
         recent_news_block=_format_recent_news_block(recent_news),
         recent_terms_block=_format_recent_terms_block(recent_terms),
+        character_additions_block=additions_text,
         news_block=_news_block(news),
     )
     client = Anthropic()
@@ -615,10 +915,26 @@ def write_script(news: list[dict[str, str]], script_cfg: dict[str, Any],
                 data.get("glossary_term", ""), used_news, script_cfg["model"])
             problems += _check_ordinal_references(data["lines"], len(used_news))
             problems += _check_sections(data["lines"])
-            if problems and attempt < _MAX_ATTEMPTS - 1:
-                raise ValueError("; ".join(problems) + "。別の用語を選び直してください。")
-            if problems:
-                print(f"[warn] 今日のひとこと用語に懸念あり(最終試行のため受容): {'; '.join(problems)}")
+            # キャラ設定シートとの照合（AI呼び出し）は、上の指摘が無いとき、または最終試行のときだけ
+            # 行う。上の指摘で書き直しになる台本を照合しても無駄になるため。最終試行は、受容する
+            # 台本の新しい設定（記録対象）を取るために必ず行う
+            character_problems: list[str] = []
+            new_facts: list[dict[str, str]] = []
+            if not problems or attempt == _MAX_ATTEMPTS - 1:
+                character_problems, new_facts = _check_character_consistency(
+                    data["lines"], sheet_text, additions_text, change_text, check_model)
+            all_problems = problems + character_problems
+            if all_problems and attempt < _MAX_ATTEMPTS - 1:
+                hint = "; ".join(all_problems) + "。"
+                if problems:
+                    hint += "別の用語を選び直してください。"
+                if character_problems:
+                    hint += "キャラ設定シートに合わせて該当のセリフを直してください。"
+                raise ValueError(hint + "直した台本全体を、指定のJSONだけで出力し直してください。")
+            if all_problems:
+                print(f"[warn] 台本に懸念あり(最終試行のため受容): {'; '.join(all_problems)}")
+            # 受容した台本で新しく出た設定。run_daily が放送後にサイトの追加分へ記録する
+            data["character_additions"] = new_facts
             total = sum(len(ln["text"]) for ln in data["lines"])
             print(f"[ok] 台本生成: {data['title']} / {len(data['lines'])}セリフ "
                   f"/ 約{total}文字 (目標{target_chars})")

@@ -30,8 +30,10 @@ from .make_feed import (
     build_episode_description,
     build_episode_title,
     update_site,
+    load_character_additions,
     load_recent_glossary_terms,
     load_recent_news_titles,
+    record_character_additions,
     record_used_news,
     write_latest_json,
 )
@@ -145,9 +147,14 @@ def main() -> None:
     terms_scope = f"直近{glossary_days}日" if glossary_days > 0 else "全期間"
     print(f"[ok] 参照する放送履歴: 公開開始日={publish_from or '(制限なし)'} / "
           f"ニュース{len(recent_news)}件・用語{len(recent_terms)}件({terms_scope})")
+    # キャラ設定シートの追加分（これまでの放送で新しく出た設定）。今日の日付の分は除いて読む
+    # （同日の再実行は号を上書きするので、上書きされる前の放送の設定を確定扱いしない）
+    character_additions = load_character_additions(
+        ROOT / "site", exclude_date=datetime.now(JST).strftime("%Y%m%d"))
+    print(f"[ok] キャラ設定シートの追加分: {len(character_additions)}件")
     script = write_script(news, script_cfg, minutes=int(show_cfg["minutes"]),
                           recent_terms=recent_terms, recent_news=recent_news,
-                          show_cfg=show_cfg)
+                          show_cfg=show_cfg, character_additions=character_additions)
 
     if os.environ.get("RADIO_DUMP_SCRIPT") == "1":
         # 試し放送でモデルの出力を見比べられるよう、生成した台本一式を書き出す
@@ -196,6 +203,14 @@ def main() -> None:
     )
     record_used_news(ROOT / "site", now.strftime("%Y%m%d"),
                      [{"title": n["title"], "link": n.get("link", "")} for n in used_news])
+    # 今回の放送で新しく出た設定を、シートの追加分としてサイトに記録する（翌日以降の
+    # 台本生成と照合に使う。公開サイトの一部として次回以降の実行にも引き継がれる）
+    new_character_facts = script.get("character_additions") or []
+    record_character_additions(ROOT / "site", now.strftime("%Y%m%d"), new_character_facts)
+    for f in new_character_facts:
+        print(f"[ok] キャラ設定シートに追加: {f.get('fact', '')}")
+    if not new_character_facts:
+        print("[ok] キャラ設定シートに追加: なし")
 
     # 外部の自動化（X告知投稿の自動生成等）が「今日の放送内容」を確実に読み取れる
     # よう、site/latest.json を書く。YouTubeのURLはまだ分からないのでNoneのまま

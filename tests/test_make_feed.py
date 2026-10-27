@@ -19,7 +19,9 @@ from src.make_feed import (
     _write_index,
     _episode_meta,
     build_episode_description,
+    load_character_additions,
     load_recent_glossary_terms,
+    record_character_additions,
     record_glossary_term,
     load_recent_news_titles,
     record_used_news,
@@ -809,3 +811,211 @@ class TestHistoryFilesWithBomAndBadEncoding(unittest.TestCase):
                 json.loads((site / "glossary_history.json").read_text(encoding="utf-8")),
                 [{"date": "20260903", "term": "新しい用語"}])
             self.assertEqual(len(json.loads((site / "news_history.json").read_text(encoding="utf-8"))), 1)
+
+
+class TestCharacterAdditions(unittest.TestCase):
+    """site/character_sheet_additions.json（キャラ設定シートの追加分）の読み書き。
+
+    放送で新しく出た設定を記録し、翌日以降の台本生成と照合に渡す。同日の再実行は号を上書きする
+    ので、その日の分は置き換える（load 側で今日の分を除き、record 側で今日の分を作り直す）。
+    """
+
+    NAME = "character_sheet_additions.json"
+    BOM = b"\xef\xbb\xbf"
+    BROKEN = {"壊れたJSON": b"{not valid json", "途中で切れたJSON": b'[{"date": "20261001", "fa',
+              "空ファイル": b"", "リストでないJSON": b'{"date": "20261001"}', "nullのJSON": b"null",
+              "不正な文字コード": json.dumps([{"date": "20261001", "who": "eme", "fact": "エメは猫が好き"}],
+                                     ensure_ascii=False).encode("cp932")}
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.site = Path(tmp.name)
+
+    def _write(self, entries) -> None:
+        (self.site / self.NAME).write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+    def _read(self):
+        return json.loads((self.site / self.NAME).read_text(encoding="utf-8"))
+
+    # ---- load_character_additions ----
+
+    def test_missing_file_returns_an_empty_list(self) -> None:
+        self.assertEqual(load_character_additions(self.site), [])
+        self.assertEqual(load_character_additions(self.site, exclude_date="20261005"), [])
+
+    def test_broken_files_return_an_empty_list_without_raising(self) -> None:
+        for label, content in self.BROKEN.items():
+            with self.subTest(case=label):
+                (self.site / self.NAME).write_bytes(content)
+                self.assertEqual(load_character_additions(self.site), [])
+
+    def test_bom_prefixed_file_is_readable(self) -> None:
+        entries = [{"date": "20261001", "who": "eme", "fact": "エメは猫が好き"}]
+        (self.site / self.NAME).write_bytes(
+            self.BOM + json.dumps(entries, ensure_ascii=False).encode("utf-8"))
+        self.assertEqual(load_character_additions(self.site), entries)
+
+    def test_entries_are_returned_in_file_order_with_only_the_three_keys(self) -> None:
+        self._write([
+            {"date": "20261001", "who": "eme", "fact": "エメは猫が好き", "memo": "余計なキーは落とす"},
+            {"date": "20261003", "who": "ruje", "fact": "  ルジェは犬が好き  "},
+            {"date": "20261002", "who": 5, "fact": "whoが文字列でない"}])
+        self.assertEqual(load_character_additions(self.site), [
+            {"date": "20261001", "who": "eme", "fact": "エメは猫が好き"},
+            {"date": "20261003", "who": "ruje", "fact": "ルジェは犬が好き"},
+            {"date": "20261002", "who": "", "fact": "whoが文字列でない"}])
+
+    def test_invalid_entries_are_skipped(self) -> None:
+        good = {"date": "20261001", "who": "eme", "fact": "エメは猫が好き"}
+        self._write([
+            "文字列", None, 3, [],
+            {"date": 20261001, "who": "eme", "fact": "dateが整数"},
+            {"date": None, "who": "eme", "fact": "dateがNone"},
+            {"who": "eme", "fact": "dateが無い"},
+            {"date": "2026-10-01", "who": "eme", "fact": "dateの形式が違う"},
+            {"date": "20261301", "who": "eme", "fact": "dateが実在しない"},
+            {"date": "20261001", "who": "eme"},
+            {"date": "20261001", "who": "eme", "fact": ""},
+            {"date": "20261001", "who": "eme", "fact": "   "},
+            {"date": "20261001", "who": "eme", "fact": 123},
+            good])
+        self.assertEqual(load_character_additions(self.site), [good])
+
+    def test_exclude_date_removes_only_that_day(self) -> None:
+        a = {"date": "20261003", "who": "eme", "fact": "A"}
+        b = {"date": "20261004", "who": "ruje", "fact": "B"}
+        c = {"date": "20261004", "who": "both", "fact": "C"}
+        d = {"date": "20261005", "who": "eme", "fact": "D"}
+        self._write([a, b, c, d])
+        self.assertEqual(load_character_additions(self.site, exclude_date="20261004"), [a, d])
+        for kwargs in ({}, {"exclude_date": None}, {"exclude_date": ""}, {"exclude_date": "20261231"}):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(load_character_additions(self.site, **kwargs), [a, b, c, d])
+
+    # ---- record_character_additions ----
+
+    def test_record_creates_the_file_with_date_who_and_fact(self) -> None:
+        record_character_additions(self.site, "20261005", [
+            {"who": "eme", "fact": "エメは猫が好き"}, {"who": "both", "fact": "ふたりは散歩する"}])
+        saved = self._read()
+        self.assertEqual(saved, [{"date": "20261005", "who": "eme", "fact": "エメは猫が好き"},
+                                 {"date": "20261005", "who": "both", "fact": "ふたりは散歩する"}])
+        self.assertEqual(list(saved[0]), ["date", "who", "fact"])
+        self.assertEqual(load_character_additions(self.site), saved)   # 読み戻せる
+
+    def test_record_appends_to_existing_days_and_keeps_them_sorted_by_date(self) -> None:
+        self._write([{"date": "20261004", "who": "eme", "fact": "後の日"},
+                     {"date": "20261001", "who": "ruje", "fact": "先の日"}])
+        record_character_additions(self.site, "20261003", [{"who": "eme", "fact": "間の日"}])
+        self.assertEqual([e["fact"] for e in self._read()], ["先の日", "間の日", "後の日"])
+
+    def test_same_day_rerun_replaces_that_days_entries(self) -> None:
+        self._write([{"date": "20261003", "who": "eme", "fact": "前の日"}])
+        record_character_additions(self.site, "20261005", [
+            {"who": "eme", "fact": "1回目の設定"}, {"who": "ruje", "fact": "1回目のもう一つ"}])
+        record_character_additions(self.site, "20261005", [
+            {"who": "eme", "fact": "1回目の設定"}, {"who": "both", "fact": "2回目だけの設定"}])
+        # 同じ日の前回分は先に消える（自分の前回分と同じ設定でも、重複扱いで落ちたりしない）
+        self.assertEqual(self._read(), [
+            {"date": "20261003", "who": "eme", "fact": "前の日"},
+            {"date": "20261005", "who": "eme", "fact": "1回目の設定"},
+            {"date": "20261005", "who": "both", "fact": "2回目だけの設定"}])
+
+    def test_empty_facts_still_remove_that_days_entries(self) -> None:
+        self._write([{"date": "20261003", "who": "eme", "fact": "前の日"},
+                     {"date": "20261005", "who": "eme", "fact": "前回の実行で出た設定"}])
+        record_character_additions(self.site, "20261005", [])
+        self.assertEqual(self._read(), [{"date": "20261003", "who": "eme", "fact": "前の日"}])
+
+    def test_empty_facts_without_a_file_do_not_fail(self) -> None:
+        record_character_additions(self.site, "20261005", [])
+        self.assertEqual(load_character_additions(self.site), [])
+
+    def test_facts_equal_to_another_days_fact_are_not_added(self) -> None:
+        self._write([{"date": "20261003", "who": "eme", "fact": "エメはAIが好き"}])
+        record_character_additions(self.site, "20261005", [
+            {"who": "eme", "fact": "エメはAIが好き"},          # 完全に同じ
+            {"who": "ruje", "fact": "  エメはＡＩが好き  "},    # 全角・前後の空白だけ違う（NFKC＋空白除去で同じ）
+            {"who": "ruje", "fact": "ルジェは猫が好き"},
+            {"who": "ruje", "fact": "ルジェは猫が好き"}])       # 今回の中で重複
+        self.assertEqual([e["fact"] for e in self._read()], ["エメはAIが好き", "ルジェは猫が好き"])
+
+    def test_malformed_facts_are_ignored(self) -> None:
+        record_character_additions(self.site, "20261005", [
+            None, "文字列", 5, {}, {"who": "eme"}, {"who": "eme", "fact": ""}, {"who": "eme", "fact": "  "},
+            {"who": "eme", "fact": 123}, {"who": "eme", "fact": None}, {"who": "eme", "fact": "有効な設定"}])
+        self.assertEqual(self._read(), [{"date": "20261005", "who": "eme", "fact": "有効な設定"}])
+
+    def test_invalid_existing_entries_are_dropped_and_valid_ones_kept(self) -> None:
+        good = {"date": "20261001", "who": "eme", "fact": "残る設定"}
+        self._write(["文字列", None, {"date": 20261001, "fact": "dateが整数"},
+                     {"date": "2026-10-01", "fact": "dateの形式が違う"}, {"fact": "dateが無い"}, good])
+        record_character_additions(self.site, "20261005", [{"who": "ruje", "fact": "今日の設定"}])
+        self.assertEqual(self._read(), [good, {"date": "20261005", "who": "ruje", "fact": "今日の設定"}])
+
+    def test_old_entries_are_kept_forever(self) -> None:
+        """追加分は人が見直してシート本体へ移すまで消さない（ニュース履歴の30日削除とは違う）。"""
+        old = {"date": "20200101", "who": "eme", "fact": "とても古い設定"}
+        self._write([old])
+        record_character_additions(self.site, "20261005", [{"who": "eme", "fact": "今日の設定"}])
+        self.assertEqual(self._read()[0], old)
+
+    def test_broken_file_is_rewritten_with_one_warning(self) -> None:
+        for label, content in self.BROKEN.items():
+            with self.subTest(case=label):
+                (self.site / self.NAME).write_bytes(content)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    record_character_additions(self.site, "20261005", [{"who": "eme", "fact": "今日の設定"}])
+                warns = [ln for ln in buf.getvalue().splitlines() if ln.startswith("[warn]")]
+                self.assertEqual(warns, [f"[warn] {self.NAME} が壊れていたため、新しいファイルとして書き直します"])
+                self.assertEqual(self._read(), [{"date": "20261005", "who": "eme", "fact": "今日の設定"}])
+
+    def test_missing_or_valid_file_does_not_warn(self) -> None:
+        for label, content in {"無い": None, "空のリスト": b"[]"}.items():
+            with self.subTest(case=label):
+                path = self.site / self.NAME
+                path.unlink(missing_ok=True)
+                if content is not None:
+                    path.write_bytes(content)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    record_character_additions(self.site, "20261005", [{"who": "eme", "fact": "今日の設定"}])
+                self.assertEqual(buf.getvalue(), "")
+                self.assertEqual(len(self._read()), 1)
+
+    def test_crash_in_the_middle_of_writing_keeps_the_original_file(self) -> None:
+        original = [{"date": "20261003", "who": "eme", "fact": "元の設定"}]
+        self._write(original)
+        original_write_text = Path.write_text
+
+        def crash_midway(self_path, data, *args, **kwargs):
+            original_write_text(self_path, data[: len(data) // 2], *args, **kwargs)   # 途中まで書いて
+            raise OSError("disk full")                                                # 落ちる
+
+        with patch.object(Path, "write_text", crash_midway):
+            with self.assertRaises(OSError):
+                record_character_additions(self.site, "20261005", [{"who": "eme", "fact": "新しい設定"}])
+        self.assertEqual(self._read(), original)
+        self.assertEqual(sorted(p.name for p in self.site.iterdir()), [self.NAME])   # 一時ファイルも残さない
+
+    def test_failure_of_the_final_replace_keeps_the_original_and_leaves_no_temp_file(self) -> None:
+        original = [{"date": "20261003", "who": "eme", "fact": "元の設定"}]
+        self._write(original)
+        with patch("src.make_feed.os.replace", side_effect=OSError("locked")):
+            with self.assertRaises(OSError):
+                record_character_additions(self.site, "20261005", [{"who": "eme", "fact": "新しい設定"}])
+        self.assertEqual(self._read(), original)
+        self.assertEqual(sorted(p.name for p in self.site.iterdir()), [self.NAME])
+
+    def test_same_day_rerun_flow_in_run_daily_order(self) -> None:
+        """run_daily の流れ（今日の分を除いて読む → 台本生成 → 記録）を再実行しても、今日の分が混ざらない。"""
+        today = "20261005"
+        record_character_additions(self.site, "20261004", [{"who": "eme", "fact": "昨日の設定"}])
+        record_character_additions(self.site, today, [{"who": "ruje", "fact": "1回目の実行で出た設定"}])
+        seen_by_the_second_run = load_character_additions(self.site, exclude_date=today)
+        self.assertEqual([e["fact"] for e in seen_by_the_second_run], ["昨日の設定"])
+        record_character_additions(self.site, today, [{"who": "both", "fact": "2回目の実行で出た設定"}])
+        self.assertEqual([e["fact"] for e in load_character_additions(self.site)],
+                         ["昨日の設定", "2回目の実行で出た設定"])

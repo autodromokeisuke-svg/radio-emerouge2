@@ -5,11 +5,16 @@
 {debut_block}
 {bgm_intro_block}
 {holiday_block}
+{character_change_block}
+{banter_block}
 直近{news_reuse_avoid_days}日で扱ったニュース:
 {recent_news_block}
 
 公開開始以降に使った「今日のひとこと用語」:
 {recent_terms_block}
+
+キャラ設定シートの追加分（これまでの放送で新しく出た設定。シート本体と同じく必ず守る）:
+{character_additions_block}
 
 ## 今日のニュース候補
 {news_block}

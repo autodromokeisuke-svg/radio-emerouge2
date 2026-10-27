@@ -162,6 +162,18 @@ class TestMainWiring(unittest.TestCase):
         for key in ["terms", "news"]:
             self.assertEqual(mocks[key].call_args.args[0].name, "site")
 
+    def test_character_additions_are_read_from_the_site_directory_and_passed_to_write_script(self) -> None:
+        loaded = [{"date": "20260101", "who": "eme", "fact": "エメは猫が好き"}]
+        with patch.object(run_daily, "load_character_additions", return_value=loaded) as loader:
+            mocks = self._run()
+        loader.assert_called_once()
+        self.assertEqual(loader.call_args.args[0].name, "site")
+        self.assertEqual(loader.call_args.kwargs["exclude_date"], datetime.now(JST).strftime("%Y%m%d"))
+        self.assertIs(mocks["write"].call_args.kwargs["character_additions"], loaded)
+
+    def test_character_additions_are_empty_when_the_site_has_no_file(self) -> None:
+        self.assertEqual(self._run()["write"].call_args.kwargs["character_additions"], [])
+
     def test_invalid_publish_from_stops_before_anything_runs(self) -> None:
         raised, mocks = _run_main_until_write_script(
             {"publish_from": "2026-09-01", "minutes": 20}, {"model": "m"})
@@ -203,6 +215,8 @@ class TestMainRunsToTheEnd(unittest.TestCase):
     # 既出ニュースは filter_recent で落ち、番号は [A=1, B=2, C=3] になる。採用は C → A の順
     SCRIPT = {"title": "AIの付けたタイトル", "glossary_term": "ベクトルDB",
               "covered_news_indices": [3, 1],
+              "character_additions": [{"who": "eme", "fact": "エメは猫が好き"},
+                                      {"who": "both", "fact": "ふたりは週末に散歩する"}],
               "lines": [{"speaker": "eme", "text": "おはよう"}, {"speaker": "ruje", "text": "おはよう"}]}
 
     def setUp(self) -> None:
@@ -220,6 +234,13 @@ class TestMainRunsToTheEnd(unittest.TestCase):
         self.site.mkdir()
         (self.site / "glossary_history.json").write_text(
             json.dumps([{"date": "20260901", "term": "フィジカルAI"}], ensure_ascii=False),
+            encoding="utf-8")
+        # キャラ設定シートの追加分: 過去の日の分と、同じ日（今日）の前回の実行で記録された分
+        self.old_additions = [{"date": "20261003", "who": "ruje", "fact": "ルジェは犬が好き"}]
+        (self.site / "character_sheet_additions.json").write_text(
+            json.dumps(self.old_additions + [{"date": self.DATE_KEY, "who": "eme",
+                                              "fact": "今日の前回の実行で出た設定"}],
+                       ensure_ascii=False),
             encoding="utf-8")
 
         # ローダが返す値は、そのまま write_script に渡ることを同一性（is）で見るための目印
@@ -254,8 +275,10 @@ class TestMainRunsToTheEnd(unittest.TestCase):
         patch("src.run_daily.datetime", _Frozen).start()
         patch("src.make_feed.datetime", _Frozen).start()
 
-        with redirect_stdout(io.StringIO()):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
             run_daily.main()
+        self.log = buf.getvalue()
 
     def _load(self, name: str):
         return json.loads((self.site / name).read_text(encoding="utf-8"))
@@ -304,6 +327,48 @@ class TestMainRunsToTheEnd(unittest.TestCase):
     def test_external_uploads_are_not_called_when_disabled(self) -> None:
         self.drive.assert_not_called()
         self.youtube.assert_not_called()
+
+    def test_character_additions_are_read_without_todays_entries_and_passed_to_write_script(self) -> None:
+        # 同日の再実行で上書きされる前回分は、確定した設定として台本生成に渡さない
+        self.assertEqual(self.write.call_args.kwargs["character_additions"], self.old_additions)
+
+    def test_new_character_facts_are_recorded_in_the_site_additions(self) -> None:
+        # 今日の前回分は新しい結果に置き換わり、過去の日の分はそのまま残る
+        self.assertEqual(self._load("character_sheet_additions.json"), self.old_additions + [
+            {"date": self.DATE_KEY, "who": "eme", "fact": "エメは猫が好き"},
+            {"date": self.DATE_KEY, "who": "both", "fact": "ふたりは週末に散歩する"}])
+
+    def test_character_additions_are_logged(self) -> None:
+        self.assertIn("[ok] キャラ設定シートの追加分: 1件\n", self.log)
+        self.assertIn("[ok] キャラ設定シートに追加: エメは猫が好き\n", self.log)
+        self.assertIn("[ok] キャラ設定シートに追加: ふたりは週末に散歩する\n", self.log)
+        self.assertNotIn("キャラ設定シートに追加: なし", self.log)
+
+    def test_additions_are_loaded_before_and_recorded_after_the_script(self) -> None:
+        loaded = self.log.index("[ok] キャラ設定シートの追加分:")
+        recorded = self.log.index("[ok] キャラ設定シートに追加:")
+        self.assertLess(self.log.index("=== 2/4 台本生成 ==="), loaded)
+        self.assertLess(loaded, self.log.index("=== 3/4 収録 ==="))
+        self.assertGreater(recorded, self.log.index("=== 4/4 配信更新 ==="))
+
+    def test_rerun_without_new_facts_removes_todays_entries_and_logs_none(self) -> None:
+        # 同日の再実行: 1回目で記録した今日の分は台本生成に渡らない。新しい設定が無ければ今日の分は消える
+        self.write.reset_mock()
+        self.write.return_value = {**self.SCRIPT, "character_additions": []}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            run_daily.main()
+        self.assertEqual(self.write.call_args.kwargs["character_additions"], self.old_additions)
+        self.assertEqual(self._load("character_sheet_additions.json"), self.old_additions)
+        self.assertIn("[ok] キャラ設定シートに追加: なし\n", buf.getvalue())
+
+    def test_script_without_the_additions_key_is_recorded_as_none(self) -> None:
+        self.write.return_value = {k: v for k, v in self.SCRIPT.items() if k != "character_additions"}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            run_daily.main()
+        self.assertEqual(self._load("character_sheet_additions.json"), self.old_additions)
+        self.assertIn("[ok] キャラ設定シートに追加: なし\n", buf.getvalue())
 
 
 if __name__ == "__main__":
