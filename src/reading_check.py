@@ -271,6 +271,21 @@ def _parse_corrections(text: str) -> list[dict[str, Any]]:
     return result
 
 
+# 安全装置による拒否（stop_reason == "refusal"）が起きた時のやり直し先。
+# claude-opus-5-5 はサイバー攻撃等のニュースを含む台本で拒否されうるため、
+# 2026-11-12の実測で実績のある claude-sonnet-5 で1回だけ再試行する。
+_REFUSAL_FALLBACK_MODEL = "claude-sonnet-5"
+
+
+def _refusal_category(resp: Any) -> str:
+    """resp.stop_details からカテゴリを取り出す（属性・dictどちらでも。無ければ「不明」）。"""
+    details = getattr(resp, "stop_details", None)
+    if details is None:
+        return "不明"
+    category = details.get("category") if isinstance(details, dict) else getattr(details, "category", None)
+    return category if isinstance(category, str) and category else "不明"
+
+
 def find_misreadings(pairs: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
     """原文とエンジンの読み（アクセント句表記）のペアから、誤読の指摘一覧を返す。
 
@@ -280,6 +295,12 @@ def find_misreadings(pairs: list[dict[str, Any]], model: str) -> list[dict[str, 
 
     fail-soft: API呼び出しやパースに失敗した場合は警告を表示して空リストを
     返す（放送を止めない）。
+
+    拒否時のやり直し: 1回目の応答が stop_reason == "refusal" で、かつ model が
+    _REFUSAL_FALLBACK_MODEL でなければ、同じ入力で代替モデルを1回だけ呼び直す。
+    last_usage は2回分の合計。やり直しが例外になった場合は [] を返し、
+    last_usage は課金済みの1回目の分を保持する。代替モデル自身の拒否や、
+    やり直しも拒否だった場合は従来どおり（警告のうえパースを試み、駄目なら []）。
     """
     global last_usage
     if not pairs:
@@ -293,11 +314,12 @@ def find_misreadings(pairs: list[dict[str, Any]], model: str) -> list[dict[str, 
     try:
         prompt = _PROMPT_TEMPLATE.format(pairs_block=_build_pairs_block(pairs))
         client = Anthropic()
+        messages = [{"role": "user", "content": prompt}]
         resp = client.messages.create(
             model=model,
             max_tokens=16000,
             system=SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
     except Exception as e:  # noqa: BLE001
         last_usage = None
@@ -306,13 +328,36 @@ def find_misreadings(pairs: list[dict[str, Any]], model: str) -> list[dict[str, 
 
     usage = resp.usage
     last_usage = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+    retried = False
+    if resp.stop_reason == "refusal" and model != _REFUSAL_FALLBACK_MODEL:
+        print(f"[warn] 読み検証: {model} が安全装置により拒否 "
+              f"(category={_refusal_category(resp)})。{_REFUSAL_FALLBACK_MODEL} でやり直します")
+        try:
+            resp2 = client.messages.create(
+                model=_REFUSAL_FALLBACK_MODEL,
+                max_tokens=16000,
+                system=SYSTEM,
+                messages=messages,
+            )
+        except Exception as e:  # noqa: BLE001
+            # 1回目のトークンは課金済みなので last_usage は1回目の分を残す
+            print(f"[warn] 読み検証に失敗（そのまま続行）: {e}")
+            return []
+        usage2 = resp2.usage
+        last_usage = {
+            "input_tokens": usage.input_tokens + usage2.input_tokens,
+            "output_tokens": usage.output_tokens + usage2.output_tokens,
+        }
+        resp = resp2
+        retried = True
     try:
         if resp.stop_reason in ("max_tokens", "refusal"):
             print(f"[warn] 読み検証: 応答が完了していない可能性 (stop_reason={resp.stop_reason})")
         text = "".join(b.text for b in resp.content if b.type == "text")
         corrections = _parse_corrections(text)
-        print(f"[ok] 読み検証(LLM): 入力{usage.input_tokens}トークン/"
-              f"出力{usage.output_tokens}トークン/指摘{len(corrections)}件")
+        suffix = f"（{_REFUSAL_FALLBACK_MODEL}でやり直し）" if retried else ""
+        print(f"[ok] 読み検証(LLM): 入力{last_usage['input_tokens']}トークン/"
+              f"出力{last_usage['output_tokens']}トークン/指摘{len(corrections)}件{suffix}")
         return corrections
     except Exception as e:  # noqa: BLE001
         print(f"[warn] 読み検証に失敗（そのまま続行）: {e}")

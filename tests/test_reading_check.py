@@ -181,5 +181,85 @@ class TestFindMisreadings(unittest.TestCase):
         A.assert_not_called()
 
 
+_OK_TEXT = '{"corrections": [{"index": 1, "surface": "分", "heard": "ワケ", "correct": "ブン"}]}'
+
+
+class TestRefusalFallback(unittest.TestCase):
+    def _pairs(self) -> list[dict]:
+        return [{"index": 1, "text": "分かりやすい分だけ", "phrases": "ワケ／ダケ"}]
+
+    def _resp(self, text: str = "", stop_reason: str = "end_turn",
+              usage: tuple[int, int] = (10, 5), details=...) -> MagicMock:
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text=text)] if text else []
+        resp.usage = MagicMock(input_tokens=usage[0], output_tokens=usage[1])
+        resp.stop_reason = stop_reason
+        if details is not ...:
+            resp.stop_details = details
+        return resp
+
+    def _run(self, side_effect, model: str = "claude-opus-5-5"):
+        import src.reading_check as rc
+        with patch("src.reading_check.Anthropic") as A:
+            create = A.return_value.messages.create
+            create.side_effect = side_effect
+            result = find_misreadings(self._pairs(), model)
+        return result, create, rc.last_usage
+
+    def test_refusal_retries_with_fallback_model(self) -> None:
+        first = self._resp(stop_reason="refusal", usage=(100, 7), details={"category": "cyber"})
+        second = self._resp(_OK_TEXT, usage=(100, 50))
+        result, create, usage = self._run([first, second])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(create.call_count, 2)
+        c1, c2 = create.call_args_list[0].kwargs, create.call_args_list[1].kwargs
+        self.assertEqual(c1["model"], "claude-opus-5-5")
+        self.assertEqual(c2["model"], "claude-sonnet-5")
+        for k in ("system", "messages", "max_tokens"):
+            self.assertEqual(c1[k], c2[k])
+        self.assertEqual(usage, {"input_tokens": 200, "output_tokens": 57})
+
+    def test_fallback_model_refusal_is_not_retried(self) -> None:
+        first = self._resp(stop_reason="refusal")
+        result, create, _ = self._run([first], model="claude-sonnet-5")
+        self.assertEqual(result, [])
+        self.assertEqual(create.call_count, 1)
+
+    def test_normal_response_is_not_retried(self) -> None:
+        result, create, usage = self._run([self._resp(_OK_TEXT)])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(usage, {"input_tokens": 10, "output_tokens": 5})
+
+    def test_retry_exception_returns_empty_and_keeps_first_usage(self) -> None:
+        first = self._resp(stop_reason="refusal", usage=(100, 7))
+        result, create, usage = self._run([first, RuntimeError("boom")])
+        self.assertEqual(result, [])
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(usage, {"input_tokens": 100, "output_tokens": 7})
+
+    def test_retry_also_refused_is_fail_soft(self) -> None:
+        first = self._resp(stop_reason="refusal", usage=(100, 7))
+        second = self._resp(stop_reason="refusal", usage=(100, 3))
+        result, create, usage = self._run([first, second])
+        self.assertEqual(result, [])
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(usage, {"input_tokens": 200, "output_tokens": 10})
+
+    def test_stop_details_shapes_do_not_crash(self) -> None:
+        class Obj:
+            category = "cyber"
+        for details in (None, {}, {"category": "cyber"}, Obj(), "weird"):
+            first = self._resp(stop_reason="refusal", details=details)
+            second = self._resp(_OK_TEXT)
+            result, create, _ = self._run([first, second])
+            self.assertEqual(len(result), 1, details)
+        # 属性自体が無い場合
+        first = self._resp(stop_reason="refusal")
+        del first.stop_details
+        result, _, _ = self._run([first, self._resp(_OK_TEXT)])
+        self.assertEqual(len(result), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

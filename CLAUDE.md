@@ -99,7 +99,9 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
   読み検証（`src/reading_check.py`）に任せる。効果の実測は
   `gh workflow run reading-eval -R autodromokeisuke-svg/radio-emerouge2`（Claude APIを少額消費。
   `-f dict_only=true` ならAPI不使用で辞書と規則だけ検証）
-- 読み検証のモデルは `script.reading_check_model`（台本モデルとは別）。**思考しないモデルにしない**
+- 読み検証のモデルは `script.reading_check_model`（台本モデルとは別。2026-11-12から `claude-opus-5-5`。
+  評価用3日分の実測で、規則で直らない誤読13件中 opus-5-5 が8件・sonnet-5 が2件・sonnet-4-6 が3件を修正。
+  安全装置に拒否された日は `claude-sonnet-5` で1回やり直す）。**思考しないモデルにしない**
   （claude-sonnet-4-6 を思考なしで使った 10/24〜11/12 は、20本で修正26件中8件が誤った書き換えだった）。
   替える時は、本番ログの `[ok] 読み検証(LLM)` の出力トークンが数千あるか、`[fix]` 行の書き換えが正しいかを見る
 - ローカルで `tools/audition.py` 等を動かしても、個人のAivisSpeech辞書は書き換えない
