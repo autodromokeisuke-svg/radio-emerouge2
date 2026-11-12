@@ -104,5 +104,13 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
   安全装置に拒否された日は `claude-sonnet-5` で1回やり直す）。**思考しないモデルにしない**
   （claude-sonnet-4-6 を思考なしで使った 10/24〜11/12 は、20本で修正26件中8件が誤った書き換えだった）。
   替える時は、本番ログの `[ok] 読み検証(LLM)` の出力トークンが数千あるか、`[fix]` 行の書き換えが正しいかを見る
+- 放送の中身を後から確かめる: 各回の実行ページのサマリーに、尺・お題・書き換えた語が出る。台本つきの記録
+  （台本の原文・エンジンへ渡した文・エンジンの読み・書き換えの内訳）は成果物 `episode-record-<run_id>` に
+  14日間残る（`gh run download <run_id> -R autodromokeisuke-svg/radio-emerouge2 -n episode-record-<run_id>`）。
+  publicリポジトリなので成果物はログインした人なら取得できる。保存期間を音声(episodes_keep)より長くしない
+- 読みの修正履歴は gh-pages の `reading_fixes_history.json`（語と読みだけ・120日分）。AIが3日以上指摘した語は
+  ログに `[hint] 辞書・規則の候補` として出る。出たら辞書か規則へ移す
+- 読み検証が**書き換えてはいけない語**は `tests/fixtures/reading_eval/guard_keep.json` の `must_keep` に足す
+  （reading-eval の「誤った書き換え」列で数える）。誤った書き換えを見つけたら、その語をここへ足す
 - ローカルで `tools/audition.py` 等を動かしても、個人のAivisSpeech辞書は書き換えない
   （辞書同期はCI専用。試す時だけ `RADIO_SYNC_READING_DICT=1`）

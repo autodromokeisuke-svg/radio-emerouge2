@@ -150,11 +150,14 @@ jobs:
           export SITE_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
           python -m src.run_daily
 
-      - name: 放送ごとの記録を保存（台本つき。公開はしない）
+      - name: 放送ごとの記録を保存（台本つき。配信サイトには載せない）
+        # publicリポジトリなので、この成果物はGitHubにログインした人なら取得できる（中身は公開済みの放送の台本）。
         # out/episode_record.json は台本の原文・読みの修正内容を含む。公開中の音声の保存期間
         # （config.yaml の episodes_keep=14）と同じ14日で消し、台本が音声より長く残らないようにする。
         # 収録が失敗した日も、台本の失敗ダンプ(last_script_error_*.txt)を拾えるよう !cancelled() で実行する。
+        # 記録の保存に失敗しても、後続の配信（Pagesへのデプロイ）は止めない（continue-on-error）。
         if: ${{ !cancelled() && steps.skip.outputs.skip != 'true' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: episode-record-${{ github.run_id }}
