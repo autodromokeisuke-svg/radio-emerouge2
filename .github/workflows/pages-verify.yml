@@ -1,0 +1,38 @@
+name: pages-verify
+
+# 公開サイト（GitHub Pages）に最新回が出ているかを確かめる手動実行専用ワークフロー。
+# 用途は2つ:
+#   1. 公開が止まった時の手動復旧（force_rebuild=true で最初にPagesの再ビルドを要求し、
+#      失敗した pages-build-deployment があれば再実行する）
+#   2. daily-radio.yml の verify-pages ジョブの動作・権限の確認
+# Secretsは使わない。何も配信せず、gh-pagesの中身も書き換えない。
+on:
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "最初にPagesの再ビルドを要求する"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: write      # Pagesの再ビルド要求（POST /pages/builds）
+      actions: write    # 失敗した pages-build-deployment の再実行
+    steps:
+      - name: リポジトリ取得
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: 公開の確認と復旧
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # run:内で ${{ }} を直接展開しない（reading-eval.yml と同じ流儀）。
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+        run: bash scripts/verify_pages.sh

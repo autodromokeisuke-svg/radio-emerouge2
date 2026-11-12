@@ -56,6 +56,11 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
   radio-emerouge は実際に 2026-09-12 に `disabled_inactivity` になった）。mainへの
   コミットが60日空きそうなら1コミット入れるか、`gh api repos/autodromokeisuke-svg/radio-emerouge2/actions/workflows --jq '.workflows[]|"\(.name) \(.state)"'`
   で状態を確認し、止まっていたら `gh workflow enable daily-radio -R autodromokeisuke-svg/radio-emerouge2`
+- **Pagesのデプロイが止まることがある**（2026-11-10 は「syncing_files」のまま11分でタイムアウトし、放送が
+  公開されなかった。10/23 も22分かかった。普段は約1分）。daily-radio の `verify-pages` ジョブが、公開サイトに
+  最新回が出たかを確かめ、6分待っても出なければ失敗した pages-build-deployment を再実行する
+  （`scripts/verify_pages.sh`。「配信済み」でスキップした実行でも走る）。それでも出なければジョブが失敗する。
+  手動で復旧する時は `gh workflow run pages-verify -R autodromokeisuke-svg/radio-emerouge2 -f force_rebuild=true`
 - `runs-on: ubuntu-24.04` に固定中。ubuntu-latest は 2026-10-19〜11-19 に 26.04 へ移行する。
   移行するなら先に workflow_dispatch で ubuntu-26.04 を試す
 - 声エンジンは 1.2.0 に固定。上げる時は `scripts/start_engine.sh` の `AIVIS_ENGINE_VERSION` を変え、
