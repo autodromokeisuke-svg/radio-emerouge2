@@ -154,3 +154,9 @@ words:
     accent_type: 0
     word_type: "COMMON_NOUN"
     # AivisSpeech 1.2.0 の audio_query がこの語で500を返す（2026-09-26本番でセリフ欠落、CIで再現）。辞書登録で回避できることをCIで確認済み（他の「〜っぱなし」は元々問題なし）
+
+  - surface: "丸投げ"
+    pronunciation: "マルナゲ"
+    accent_type: 0
+    word_type: "COMMON_NOUN"
+    # 2026-10-29・11-06・11-12に誤読（マンナゲゲ）。読み検証は直せず見送りが続いた

@@ -94,5 +94,12 @@
   {"text": "出しっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "つかいっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
   {"text": "使いっ放し", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
-  {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]}
+  {"text": "言いっぱなし", "must_contain": "パナシ", "note": "repro-500c", "roles": ["eme", "ruje"]},
+
+  {"text": "それはAIに丸投げだね", "must_contain": "マルナゲ", "note": "丸投げ fix", "roles": ["eme", "ruje"]},
+  {"text": "丸投げしてしまうと危ない", "must_contain": "マルナゲ", "note": "丸投げ fix", "roles": ["eme", "ruje"]},
+  {"text": "丸い形をしている", "must_contain": "マルイ", "note": "丸投げ collateral"},
+  {"text": "丸ごと任せる", "must_contain": "マルゴト", "note": "丸投げ collateral"},
+  {"text": "ボールを投げる", "must_contain": "ナゲル", "note": "丸投げ collateral"},
+  {"text": "途中で投げ出さない", "must_contain": "ナゲダ", "note": "丸投げ collateral"}
 ]

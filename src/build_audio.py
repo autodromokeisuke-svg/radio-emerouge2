@@ -22,6 +22,7 @@ from .reading_check import (
     to_katakana,
 )
 from .reading_normalize import normalize_for_tts
+from .reading_rules import find_rule_hits
 from .tts import get_engine
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
@@ -493,18 +494,89 @@ def _apply_reading_corrections(engine: Any, lines: list[dict[str, str]],
     return report
 
 
-def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
-                                   prepared_texts: list[str], model: str
-                                   ) -> tuple[list[dict | None], dict[str, Any]]:
-    """全セリフの読みをエンジンに問い合わせ、LLMの指摘を機械的な再検証で直す。
+def _find_replaced_span(Ro: str, Rc: str, K: str) -> str | None:
+    """RcがRoの連続した1区間XをKに置き換えたものと完全一致するなら、Xを返す。
 
-    LLM呼び出しは1回のみ（find_misreadings）。直せたかどうかの2周目は
+    Rc中のKの出現位置jごとに、Ro.startswith(Rc[:j]) かつ Ro.endswith(Rc[j+len(K):])
+    を確かめ、Xの長さが1以上 2*len(K)+2 以下になるものを採用する。無ければNone。
+    """
+    j = Rc.find(K)
+    while j != -1:
+        pre, suf = Rc[:j], Rc[j + len(K):]
+        if Ro.startswith(pre) and (suf == "" or Ro.endswith(suf)):
+            xlen = len(Ro) - len(pre) - len(suf)
+            if 1 <= xlen <= 2 * len(K) + 2:
+                return Ro[len(pre):len(pre) + xlen]
+        j = Rc.find(K, j + 1)
+    return None
+
+
+def _apply_reading_rules(engine: Any, lines: list[dict[str, str]],
+                         texts: list[str], queries: list[dict | None]) -> dict[str, Any]:
+    """決まった誤読を規則（src/reading_rules.py）で直す。LLM呼び出しなし。
+
+    該当箇所をひらがなに置き換えた候補をエンジンに読ませ、読みが「該当区間
+    だけ」変わる時のみ採用する（エンジンが既に規則どおり読んでいれば何もしない）。
+    texts・queries はその場で更新する。ログにセリフの行全体は出さず、例外は型名のみ。
+    """
+    report: dict[str, Any] = {"rule_applied": 0, "rule_noop": 0, "rule_skipped": 0,
+                              "rule_details": []}
+    for i, ln in enumerate(lines):
+        if queries[i] is None:
+            continue
+        hits = find_rule_hits(texts[i])
+        for h in reversed(hits):
+            n = i + 1
+            label = f"{n}行目 「{_truncate_log(h['surface'])}」"
+            correct = to_katakana(h["kana"])
+            cand_text = texts[i][:h["start"]] + h["kana"] + texts[i][h["end"]:]
+            try:
+                cand_q = engine.query(ln["speaker"], cand_text)
+            except Exception as e:  # noqa: BLE001
+                report["rule_skipped"] += 1
+                report["rule_details"].append({"index": n, "surface": h["surface"], "heard": "",
+                                               "correct": correct, "rule": h["rule"],
+                                               "outcome": "rule_skipped"})
+                print(f"[warn] {label} 規則({h['rule']})の確認で問い合わせに失敗: "
+                      f"{type(e).__name__}。見送ります")
+                continue
+            Ro = normalize_kana(extract_reading(queries[i]))
+            Rc = normalize_kana(extract_reading(cand_q))
+            K = normalize_kana(h["kana"])
+            if Rc == Ro:
+                report["rule_noop"] += 1
+                continue
+            X = _find_replaced_span(Ro, Rc, K)
+            if X is None:
+                report["rule_skipped"] += 1
+                report["rule_details"].append({"index": n, "surface": h["surface"], "heard": "",
+                                               "correct": correct, "rule": h["rule"],
+                                               "outcome": "rule_skipped"})
+                print(f"[warn] {label} 規則({h['rule']})の差し替えで読みが想定外に変わるため見送ります")
+                continue
+            texts[i] = cand_text
+            queries[i] = cand_q
+            report["rule_applied"] += 1
+            report["rule_details"].append({"index": n, "surface": h["surface"], "heard": X,
+                                           "correct": correct, "rule": h["rule"],
+                                           "outcome": "rule_applied"})
+            print(f"[fix] {label} {_truncate_log(X)}→{correct}（規則 {h['rule']}）")
+    return report
+
+
+def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
+                                   prepared_texts: list[str], model: str | None
+                                   ) -> tuple[list[dict | None], dict[str, Any]]:
+    """全セリフの読みをエンジンに問い合わせ、規則とLLMの指摘を機械的な再検証で直す。
+
+    まず決まった誤読を規則で直し（_apply_reading_rules）、次にLLMの指摘
+    （find_misreadings、1回のみ）を適用する。直せたかどうかの2周目は
     エンジンへの再問い合わせだけで完結する（詳細は reading_check.py 冒頭参照）。
+    modelが空（None/""）ならLLMは呼ばず、規則だけを適用する（評価ツール用）。
     戻り値は (合成にそのまま使えるクエリJSONのリスト, 件数レポート)。
     """
     texts = list(prepared_texts)
     queries: list[dict | None] = [None] * len(lines)
-    pairs = []
     query_failed = 0
     for i, ln in enumerate(lines):
         try:
@@ -518,14 +590,20 @@ def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
             queries[i] = None
             continue
         queries[i] = q
-        pairs.append({"index": i + 1, "text": texts[i], "phrases": extract_phrases(q)})
 
-    corrections = find_misreadings(pairs, model)
+    rule_report = _apply_reading_rules(engine, lines, texts, queries)
+
+    pairs = [{"index": i + 1, "text": texts[i], "phrases": extract_phrases(q)}
+             for i, q in enumerate(queries) if q is not None]
+
+    corrections = find_misreadings(pairs, model) if model else []
     report = _apply_reading_corrections(engine, lines, texts, queries, corrections)
+    report.update(rule_report)
     report["query_failed"] = query_failed
     print(f"[ok] 読み検証: 指摘{report['pointed']}件 / 修正{report['applied']}件 / "
           f"検証不能{report['unverified']}件 / 範囲不審で除外{report['rejected_scope']}件 / "
-          f"修正できず{report['unfixable']}件 / 読み検証対象外{query_failed}件")
+          f"修正できず{report['unfixable']}件 / 読み検証対象外{query_failed}件 / "
+          f"規則で修正{report['rule_applied']}件")
     return queries, report
 
 

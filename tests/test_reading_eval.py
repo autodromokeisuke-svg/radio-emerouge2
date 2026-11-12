@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -79,6 +79,53 @@ class TestRunDictChecks(unittest.TestCase):
         self.assertEqual(calls, ["eme", "ruje"])
         self.assertEqual([r["role"] for r in results], ["eme", "ruje"])
         self.assertTrue(all(r["passed"] for r in results))
+
+
+class TestRunFixtureRulesOnly(unittest.TestCase):
+    def _engine(self) -> MagicMock:
+        readings = {
+            "その人はすごい": "ソノジンワスゴイ",
+            "そのひとはすごい": "ソノヒトワスゴイ",
+            "他にもある": "タニモアル",
+            "ほかにもある": "ホカニモアル",
+        }
+
+        def fake_query(role: str, text: str):
+            r = readings[text]
+            return {"accent_phrases": [{"moras": [{"text": c} for c in r]}]}
+
+        engine = MagicMock()
+        engine.query.side_effect = fake_query
+        return engine
+
+    def _data(self) -> dict:
+        return {
+            "lines": [{"speaker": "eme", "text": "その人はすごい"},
+                      {"speaker": "ruje", "text": "他にもある"}],
+            "expected": [{"line": 1, "surface": "人", "heard": "ジン", "correct": "ヒト"}],
+        }
+
+    def test_fixed_by_rule_counted_without_llm(self) -> None:
+        engine = self._engine()
+        with patch("src.build_audio.find_misreadings") as fm:
+            res = reading_eval.run_fixture(engine, "t", self._data(), [reading_eval.RULES_ONLY])
+        fm.assert_not_called()
+        m = res["per_model"][reading_eval.RULES_ONLY]
+        self.assertEqual(res["baseline_misread"], 1)
+        self.assertEqual(m["fixed"], 0)
+        self.assertEqual(m["fixed_by_rule"], 1)  # 二重に数えない
+        # ラベル外の行(2行目)への規則適用が残る
+        self.assertEqual([d["index"] for d in m["unlabelled_rule_fixes"]], [2])
+
+    def test_markdown_shows_rule_columns_and_label(self) -> None:
+        engine = self._engine()
+        with patch("src.build_audio.find_misreadings"):
+            res = reading_eval.run_fixture(engine, "t", self._data(), [reading_eval.RULES_ONLY])
+        md = reading_eval._build_markdown([res], [reading_eval.RULES_ONLY])
+        self.assertIn("規則のみ", md)
+        self.assertIn("規則で修正", md)
+        self.assertIn("ラベル外の規則適用", md)
+        self.assertIn("1/1（100%）", md)  # 再現率 = (fixed + fixed_by_rule) / 現状誤読
 
 
 if __name__ == "__main__":

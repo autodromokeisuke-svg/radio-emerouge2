@@ -13,7 +13,9 @@ workflow_dispatchで手動実行）で行う想定。tests/fixtures/reading_eval
      各JSONについて、指摘フェーズ前の「現状の誤読」をラベルと突き合わせてベースラインとし、
      モデルごとに読み検証パイプラインを実走させて、ラベルのうち何件直ったか（再現率）・
      ラベルに無い行への修正（人間がFP/ラベル漏れを判断する材料）・トークン数・概算コストを出す
-  3) 結果はMarkdownでstdoutに出し、GITHUB_STEP_SUMMARYが設定されていればそこにも追記する
+  3) --dict-only のときは、辞書チェックの後に台本フィクスチャを「規則のみ」（モデルなし・API不使用。
+     src/reading_rules.py の規則だけをエンジンで検証して適用）で評価する
+  4) 結果はMarkdownでstdoutに出し、GITHUB_STEP_SUMMARYが設定されていればそこにも追記する
      （何かを配信・公開する処理は一切行わない）
 """
 from __future__ import annotations
@@ -47,6 +49,13 @@ _PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-5-5": (4.0, 20.0),
     "claude-haiku-4-5": (1.0, 5.0),
 }
+
+
+RULES_ONLY = ""  # モデル名が空文字＝LLMを呼ばず規則だけで評価する（表示は「規則のみ」）
+
+
+def _model_label(model: str) -> str:
+    return model or "規則のみ"
 
 
 def _price_for(model: str) -> tuple[float, float] | None:
@@ -171,22 +180,34 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
         # 引けるようにしておく（「たまたま読みがcorrectを含んでいた」だけでは
         # "fixed"扱いにしない。パイプラインが実際に修正を適用した行に限る）。
         applied_lines = {d["index"] for d in report["details"] if d["outcome"] == "applied"}
+        # 規則（reading_rules）が適用された行。規則で直ったラベルは fixed_by_rule 側だけに
+        # 数える（fixed＝AIの指摘で直った数、とは二重に数えない）。
+        rule_lines = {d["index"] for d in report.get("rule_details", [])
+                      if d["outcome"] == "rule_applied"}
 
         fixed = 0
+        fixed_by_rule = 0
         for idx in baseline_misread:
             item = expected[idx]
             pos = item["line"] - 1
-            if item["line"] not in applied_lines:
+            if item["line"] not in applied_lines and item["line"] not in rule_lines:
                 continue
             q = queries[pos]
             reading = extract_reading(q) if q is not None else ""
             if kana_contains(reading, item["correct"]):
-                fixed += 1
+                if item["line"] in rule_lines:
+                    fixed_by_rule += 1
+                else:
+                    fixed += 1
 
         # ラベルに無い行への修正（誤検知の可能性もラベル漏れの可能性もあるので、
         # 人間が中身を見て判断できるよう surface/heard/correct を残しておく）
         unlabelled_fixes = [d for d in report["details"]
                             if d["outcome"] == "applied" and d["index"] not in expected_lines]
+
+        # ラベル外の行への規則適用（誤適用を人が見つけられるように残す）
+        unlabelled_rule_fixes = [d for d in report.get("rule_details", [])
+                                 if d["outcome"] == "rule_applied" and d["index"] not in expected_lines]
 
         usage = reading_check_mod.last_usage
         price = _price_for(model)
@@ -196,6 +217,10 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
 
         per_model[model] = {
             "fixed": fixed,
+            "fixed_by_rule": fixed_by_rule,
+            "rule_applied": report.get("rule_applied", 0),
+            "rule_skipped": report.get("rule_skipped", 0),
+            "unlabelled_rule_fixes": unlabelled_rule_fixes,
             "applied": report["applied"],
             "unverified": report["unverified"],
             "rejected_scope": report["rejected_scope"],
@@ -204,10 +229,10 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
             "usage": usage,
             "cost_usd": cost,
         }
-        print(f"[{name}] {model}: 修正{fixed}/{len(baseline_misread)} / "
+        print(f"[{name}] {_model_label(model)}: 修正{fixed}+規則{fixed_by_rule}/{len(baseline_misread)} / "
              f"適用{report['applied']}件 / 検証不能{report['unverified']}件 / "
              f"範囲不審で除外{report['rejected_scope']}件 / 修正できず{report['unfixable']}件 / "
-             f"ラベル外の修正{len(unlabelled_fixes)}件")
+             f"ラベル外の修正{len(unlabelled_fixes)}件 / ラベル外の規則適用{len(unlabelled_rule_fixes)}件")
 
     return {"name": name, "n_lines": len(lines), "n_expected": len(expected),
            "baseline_misread": len(baseline_misread), "per_model": per_model}
@@ -237,12 +262,13 @@ def _build_dict_checks_markdown(dict_results: list[dict[str, Any]]) -> str:
 
 def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
     lines = ["## 読み検証 評価結果", "", "### モデル別サマリー（全台本合計）", "",
-             "| モデル | ラベル誤読数 | 修正数 | 再現率 | 検証不能 | 範囲不審で除外 | 修正できず | "
+             "| モデル | ラベル誤読数 | 修正数 | 規則で修正 | 再現率 | 検証不能 | 範囲不審で除外 | 修正できず | "
              "ラベル外修正 | 入力トークン | 出力トークン | 概算コスト |",
-             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for model in models:
         total_expected = sum(r["baseline_misread"] for r in results)
         total_fixed = sum(r["per_model"][model]["fixed"] for r in results)
+        total_rule = sum(r["per_model"][model]["fixed_by_rule"] for r in results)
         total_unverified = sum(r["per_model"][model]["unverified"] for r in results)
         total_rejected_scope = sum(r["per_model"][model]["rejected_scope"] for r in results)
         total_unfixable = sum(r["per_model"][model]["unfixable"] for r in results)
@@ -250,11 +276,11 @@ def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
         total_in = sum((r["per_model"][model]["usage"] or {}).get("input_tokens", 0) for r in results)
         total_out = sum((r["per_model"][model]["usage"] or {}).get("output_tokens", 0) for r in results)
         costs = [r["per_model"][model]["cost_usd"] for r in results]
-        cost_str = f"${sum(c for c in costs if c is not None):.4f}" if any(c is not None for c in costs) else "?"
-        recall_str = f"{total_fixed}/{total_expected}"
+        cost_str = f"${sum(c for c in costs if c is not None):.4f}" if any(c is not None for c in costs) else ("-" if not model else "?")
+        recall_str = f"{total_fixed + total_rule}/{total_expected}"
         if total_expected:
-            recall_str += f"（{total_fixed / total_expected:.0%}）"
-        lines.append(f"| {model} | {total_expected} | {total_fixed} | {recall_str} | "
+            recall_str += f"（{(total_fixed + total_rule) / total_expected:.0%}）"
+        lines.append(f"| {_model_label(model)} | {total_expected} | {total_fixed} | {total_rule} | {recall_str} | "
                      f"{total_unverified} | {total_rejected_scope} | {total_unfixable} | "
                      f"{total_unlabelled} | {total_in} | {total_out} | {cost_str} |")
     lines.append("")
@@ -267,15 +293,21 @@ def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
         lines.append("")
         for model in models:
             m = r["per_model"][model]
-            recall = f"{m['fixed']}/{r['baseline_misread']}"
+            recall = f"{m['fixed'] + m['fixed_by_rule']}/{r['baseline_misread']}"
             if r["baseline_misread"]:
-                recall += f"（{m['fixed'] / r['baseline_misread']:.0%}）"
-            lines.append(f"- **{model}**: 修正 {recall} / 検証不能 {m['unverified']}件 / "
+                recall += f"（{(m['fixed'] + m['fixed_by_rule']) / r['baseline_misread']:.0%}）"
+            lines.append(f"- **{_model_label(model)}**: 修正 {recall}（うちAI {m['fixed']} / "
+                         f"規則で修正 {m['fixed_by_rule']}） / 検証不能 {m['unverified']}件 / "
                          f"範囲不審で除外 {m['rejected_scope']}件 / 修正できず {m['unfixable']}件")
             if m["unlabelled_fixes"]:
                 lines.append("  - ラベル外の行への修正（誤検知かラベル漏れか要確認）:")
                 for d in m["unlabelled_fixes"]:
                     lines.append(f"    - {d['index']}行目 「{d['surface']}」 {d['heard']}→{d['correct']}")
+            if m["unlabelled_rule_fixes"]:
+                lines.append("  - ラベル外の規則適用（誤適用でないか要確認）:")
+                for d in m["unlabelled_rule_fixes"]:
+                    lines.append(f"    - {d['index']}行目 「{d['surface']}」 {d['heard']}→{d['correct']}"
+                                 f"（規則 {d['rule']}）")
         lines.append("")
     return "\n".join(lines)
 
@@ -287,8 +319,9 @@ def main() -> None:
     ap.add_argument("--fixtures", default=str(ROOT / "tests" / "fixtures" / "reading_eval"),
                     help="評価用台本(JSON)が入ったディレクトリ")
     ap.add_argument("--dict-only", action="store_true",
-                    help="読み辞書(dict_checks.json)のチェックだけ行い、LLMを使う台本評価は"
-                         "スキップする（APIキー不要。CI側の固定バージョンエンジンで辞書だけ検証したい時用）")
+                    help="読み辞書(dict_checks.json)のチェックに加え、台本フィクスチャを「規則のみ」"
+                         "（LLMを呼ばない。APIキー不要）で評価する。LLMを使う評価はスキップ"
+                         "（CI側の固定バージョンエンジンで辞書と規則だけ検証したい時用）")
     args = ap.parse_args()
 
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
@@ -314,17 +347,19 @@ def main() -> None:
             f.write(dict_report_md + "\n")
 
     if args.dict_only:
-        if not dict_ok:
-            raise SystemExit("読み辞書チェックに失敗した項目があります（詳細は上記）")
-        return
-
-    if args.models:
+        models = [RULES_ONLY]
+    elif args.models:
         models = [m.strip() for m in args.models.split(",") if m.strip()]
     else:
         models = [cfg["script"].get("reading_check_model") or cfg["script"]["model"]]
 
     fixtures = _load_fixtures(fixtures_dir)
     if not fixtures:
+        if args.dict_only:
+            print("[warn] 評価用の台本が無いため規則のみの評価をスキップ")
+            if not dict_ok:
+                raise SystemExit("読み辞書チェックに失敗した項目があります（詳細は上記）")
+            return
         raise SystemExit(f"評価用の台本が見つからない: {fixtures_dir}")
 
     results = [run_fixture(engine, name, data, models) for name, data in fixtures]
@@ -335,6 +370,9 @@ def main() -> None:
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:
             f.write(report_md + "\n")
+
+    if args.dict_only and not dict_ok:
+        raise SystemExit("読み辞書チェックに失敗した項目があります（詳細は上記）")
 
 
 if __name__ == "__main__":

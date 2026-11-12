@@ -1,6 +1,8 @@
 """_fix_known_misreadings() / _embed_cover_art() / 読み検証まわりの単体テスト。"""
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,7 @@ from pydub import AudioSegment
 from src.build_audio import (
     ASSETS,
     _apply_reading_corrections,
+    _apply_reading_rules,
     _embed_cover_art,
     _fix_known_misreadings,
     _run_reading_check_with_report,
@@ -412,6 +415,141 @@ class TestRunReadingCheckWithReport(unittest.TestCase):
         # find_misreadingsに渡されたpairsに失敗した2行目は含まれない
         pairs_arg = fm.call_args[0][0]
         self.assertEqual([p["index"] for p in pairs_arg], [1, 3])
+
+
+class TestApplyReadingRules(unittest.TestCase):
+    def test_local_change_is_applied(self) -> None:
+        engine = _FakeEngine({"感じてるひとは多い": _q("カンジテルヒトワオオイ")})
+        lines = [{"speaker": "eme"}]
+        texts = ["感じてる人は多い"]
+        queries = [_q("カンジテルジンワオオイ")]
+
+        report = _apply_reading_rules(engine, lines, texts, queries)
+
+        self.assertEqual(texts[0], "感じてるひとは多い")
+        self.assertEqual(queries[0], _q("カンジテルヒトワオオイ"))
+        self.assertEqual(report["rule_applied"], 1)
+        self.assertEqual(report["rule_noop"], 0)
+        self.assertEqual(report["rule_skipped"], 0)
+        self.assertEqual(report["rule_details"], [
+            {"index": 1, "surface": "人", "heard": "ジン", "correct": "ヒト",
+             "rule": "hito", "outcome": "rule_applied"}])
+        self.assertEqual(engine.unexpected, [])
+
+    def test_unchanged_reading_is_noop(self) -> None:
+        engine = _FakeEngine({"感じてるひとは多い": _q("カンジテルヒトワオオイ")})
+        texts = ["感じてる人は多い"]
+        queries = [_q("カンジテルヒトワオオイ")]
+
+        report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+
+        self.assertEqual(texts[0], "感じてる人は多い")
+        self.assertEqual(queries[0], _q("カンジテルヒトワオオイ"))
+        self.assertEqual((report["rule_applied"], report["rule_noop"], report["rule_skipped"]), (0, 1, 0))
+        self.assertEqual(report["rule_details"], [])
+
+    def test_change_outside_span_is_skipped(self) -> None:
+        engine = _FakeEngine({"感じてるひとは多い": _q("ヒトワナンカチガウ")})
+        texts = ["感じてる人は多い"]
+        original_q = _q("カンジテルジンワオオイ")
+        queries = [original_q]
+
+        report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+
+        self.assertEqual(texts[0], "感じてる人は多い")
+        self.assertIs(queries[0], original_q)
+        self.assertEqual((report["rule_applied"], report["rule_skipped"]), (0, 1))
+        self.assertEqual(report["rule_details"][0]["outcome"], "rule_skipped")
+
+    def test_too_long_span_is_skipped(self) -> None:
+        # 置き換え区間Xが 2*len(K)+2 を超える（K=ヒト → 最大6拍）なら見送る
+        engine = _FakeEngine({"あの人": _q("アノヒト")})
+        texts = ["あの人"]
+        queries = [_q("アノナンカゼンゼンチガウヨミ")]
+        report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+        self.assertEqual(report["rule_skipped"], 1)
+
+    def test_query_exception_is_skipped_without_leaking_text(self) -> None:
+        engine = _FakeEngine({})  # 候補が未登録 → RuntimeError
+        texts = ["感じてる人は多い"]
+        queries = [_q("カンジテルジンワオオイ")]
+        buf = io.StringIO()
+
+        with contextlib.redirect_stdout(buf):
+            report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+
+        self.assertEqual(report["rule_skipped"], 1)
+        self.assertEqual(texts[0], "感じてる人は多い")
+        out = buf.getvalue()
+        self.assertIn("RuntimeError", out)
+        self.assertNotIn("感じてる", out)  # セリフの行全体はログに出さない
+
+    def test_two_hits_on_one_line(self) -> None:
+        engine = _FakeEngine({
+            "その人はほかにも": _q("ソノジンワホカニモ"),
+            "そのひとはほかにも": _q("ソノヒトワホカニモ"),
+        })
+        texts = ["その人は他にも"]
+        queries = [_q("ソノジンワタニモ")]
+
+        report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+
+        self.assertEqual(texts[0], "そのひとはほかにも")
+        self.assertEqual(queries[0], _q("ソノヒトワホカニモ"))
+        self.assertEqual(report["rule_applied"], 2)
+        # 後ろから処理するので「他」が先
+        self.assertEqual([d["rule"] for d in report["rule_details"]], ["hoka", "hito"])
+        self.assertEqual([d["heard"] for d in report["rule_details"]], ["タ", "ジン"])
+        self.assertEqual(engine.unexpected, [])
+
+    def test_none_query_lines_are_untouched(self) -> None:
+        engine = _FakeEngine({})
+        texts = ["感じてる人は多い"]
+        queries: list[dict | None] = [None]
+
+        report = _apply_reading_rules(engine, [{"speaker": "eme"}], texts, queries)
+
+        self.assertEqual(engine.calls, [])
+        self.assertIsNone(queries[0])
+        self.assertEqual(texts[0], "感じてる人は多い")
+        self.assertEqual(report["rule_applied"] + report["rule_noop"] + report["rule_skipped"], 0)
+
+
+class TestRunReadingCheckRules(unittest.TestCase):
+    def _engine(self) -> _FakeEngine:
+        return _FakeEngine({
+            "その人は他にも": _q("ソノジンワタニモ"),
+            "その人はほかにも": _q("ソノジンワホカニモ"),
+            "そのひとはほかにも": _q("ソノヒトワホカニモ"),
+        })
+
+    def test_empty_model_skips_llm_and_applies_rules(self) -> None:
+        for model in ("", None):
+            with self.subTest(model=model):
+                engine = self._engine()
+                lines = [{"speaker": "eme", "text": "その人は他にも"}]
+                with patch("src.build_audio.find_misreadings") as fm:
+                    queries, report = _run_reading_check_with_report(
+                        engine, lines, ["その人は他にも"], model)
+                fm.assert_not_called()
+                self.assertEqual(queries[0], _q("ソノヒトワホカニモ"))
+                self.assertEqual(report["rule_applied"], 2)
+                self.assertEqual(report["pointed"], 0)
+                self.assertEqual(engine.unexpected, [])
+
+    def test_report_has_existing_and_rule_keys(self) -> None:
+        engine = self._engine()
+        lines = [{"speaker": "eme", "text": "その人は他にも"}]
+        with patch("src.build_audio.find_misreadings", return_value=[]) as fm:
+            _, report = _run_reading_check_with_report(
+                engine, lines, ["その人は他にも"], "claude-sonnet-5")
+        fm.assert_called_once()
+        # pairsは規則適用後のテキストから作られる
+        self.assertEqual(fm.call_args[0][0][0]["text"], "そのひとはほかにも")
+        for key in ("pointed", "applied", "unverified", "rejected_scope", "unfixable",
+                    "details", "query_failed", "rule_applied", "rule_noop", "rule_skipped",
+                    "rule_details"):
+            self.assertIn(key, report)
 
 
 class _FakeSynthEngine:

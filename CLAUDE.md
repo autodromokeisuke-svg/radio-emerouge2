@@ -94,8 +94,13 @@ GitHub PagesのポッドキャストRSSで配信する。ケイスケのPCの電
 - ElevenLabs切替時: `gh secret set ELEVENLABS_API_KEY` + voice_id 2つをconfigへ
 - 読み間違いの報告が来たら: 実機で誤読条件を特定 → 文脈に関係なく誤読する語は
   `assets/reading_dict.yaml` へ（巻き込み確認の文も `tests/fixtures/reading_eval/dict_checks.json` へ）、
-  文脈依存の誤読は読み検証（`src/reading_check.py`）に任せる。効果の実測は
+  単独の漢字など前後の文字で決まる誤読（人・他・分・緩）は規則 `src/reading_rules.py` へ
+  （エンジンに両方読ませ、読みが変わる時だけ差し替える）、それ以外の文脈依存の誤読は
+  読み検証（`src/reading_check.py`）に任せる。効果の実測は
   `gh workflow run reading-eval -R autodromokeisuke-svg/radio-emerouge2`（Claude APIを少額消費。
-  `-f dict_only=true` ならAPI不使用で辞書だけ検証）
+  `-f dict_only=true` ならAPI不使用で辞書と規則だけ検証）
+- 読み検証のモデルは `script.reading_check_model`（台本モデルとは別）。**思考しないモデルにしない**
+  （claude-sonnet-4-6 を思考なしで使った 10/24〜11/12 は、20本で修正26件中8件が誤った書き換えだった）。
+  替える時は、本番ログの `[ok] 読み検証(LLM)` の出力トークンが数千あるか、`[fix]` 行の書き換えが正しいかを見る
 - ローカルで `tools/audition.py` 等を動かしても、個人のAivisSpeech辞書は書き換えない
   （辞書同期はCI専用。試す時だけ `RADIO_SYNC_READING_DICT=1`）
