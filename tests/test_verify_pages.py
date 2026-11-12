@@ -80,6 +80,9 @@ def run_verify(tmp_path, **env):
     fake.mkdir(exist_ok=True)
     _write(fake / "gh", FAKE_GH)
     _write(fake / "curl", FAKE_CURL)
+    # Linuxでは実行権限が無いとPATH上で無視され、本物のgh/curlが呼ばれるため付与する
+    (fake / "gh").chmod(0o755)
+    (fake / "curl").chmod(0o755)
     log = tmp_path / "calls.log"
     log.write_text("", encoding="utf-8")
     e = os.environ.copy()
