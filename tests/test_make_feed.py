@@ -23,6 +23,9 @@ from src.make_feed import (
     load_recent_glossary_terms,
     record_character_additions,
     record_glossary_term,
+    reading_fix_items,
+    recurring_reading_candidates,
+    record_reading_fixes,
     load_recent_news_titles,
     record_used_news,
     update_site,
@@ -811,6 +814,134 @@ class TestHistoryFilesWithBomAndBadEncoding(unittest.TestCase):
                 json.loads((site / "glossary_history.json").read_text(encoding="utf-8")),
                 [{"date": "20260903", "term": "新しい用語"}])
             self.assertEqual(len(json.loads((site / "news_history.json").read_text(encoding="utf-8"))), 1)
+
+
+class TestReadingFixesHistory(unittest.TestCase):
+    """record_reading_fixes / reading_fix_items / recurring_reading_candidates。"""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.site = Path(tmp.name)
+        self.path = self.site / "reading_fixes_history.json"
+
+    def _load(self):
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _llm(surface, correct, outcome="applied", heard="ヨミ"):
+        return {"surface": surface, "heard": heard, "correct": correct, "kind": "llm",
+                "outcome": outcome}
+
+    @staticmethod
+    def _key(days_ago: int, today: str = "20261105") -> str:
+        d = datetime.strptime(today, "%Y%m%d") - timedelta(days=days_ago)
+        return d.strftime("%Y%m%d")
+
+    # ---- record_reading_fixes ----
+    def test_creates_the_file_with_the_days_items(self) -> None:
+        item = self._llm("目視", "モクシ", heard="メミ")
+        record_reading_fixes(self.site, "20261105", [item])
+        self.assertEqual(self._load(), [{"date": "20261105", "items": [item]}])
+
+    def test_same_date_is_replaced_and_dates_are_ascending(self) -> None:
+        record_reading_fixes(self.site, "20261105", [self._llm("A", "エー")])
+        record_reading_fixes(self.site, "20261103", [self._llm("B", "ビー")])
+        record_reading_fixes(self.site, "20261105", [self._llm("C", "シー")])
+        data = self._load()
+        self.assertEqual([e["date"] for e in data], ["20261103", "20261105"])
+        self.assertEqual([i["surface"] for i in data[1]["items"]], ["C"])
+
+    def test_entries_older_than_120_days_are_dropped(self) -> None:
+        record_reading_fixes(self.site, self._key(121), [self._llm("古", "フル")])
+        record_reading_fixes(self.site, self._key(120), [self._llm("境", "サカイ")])
+        record_reading_fixes(self.site, "20261105", [])
+        self.assertEqual([e["date"] for e in self._load()], [self._key(120), "20261105"])
+
+    def test_fields_are_truncated_to_24_chars(self) -> None:
+        long = "あ" * 40
+        record_reading_fixes(self.site, "20261105", [self._llm(long, "ア" * 30, heard="イ" * 25)])
+        (it,) = self._load()[0]["items"]
+        self.assertEqual((len(it["surface"]), len(it["heard"]), len(it["correct"])), (24, 24, 24))
+
+    def test_notation_only_miss_is_not_recorded(self) -> None:
+        miss = self._llm("今日", "キョー", outcome="rejected_scope", heard="キョウ")
+        real = self._llm("今日", "キョウ", outcome="rejected_scope", heard="コンニチ")
+        rule = {"surface": "他", "heard": "ホカ", "correct": "ホカ", "kind": "rule",
+                "outcome": "rule_applied"}
+        record_reading_fixes(self.site, "20261105", [miss, real, rule])
+        self.assertEqual(self._load()[0]["items"], [real, rule])
+
+    def test_broken_file_is_rewritten(self) -> None:
+        self.path.write_text("{ not json", encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            record_reading_fixes(self.site, "20261105", [self._llm("A", "エー")])
+        self.assertEqual(len(self._load()), 1)
+
+    # ---- reading_fix_items ----
+    def test_items_are_built_from_details_and_applied_rule_details(self) -> None:
+        report = {
+            "details": [
+                {"index": 1, "surface": "目視", "heard": "メミ", "correct": "モクシ", "outcome": "applied"},
+                {"index": 2, "surface": "X", "heard": "エックス", "correct": "エックス",
+                 "outcome": "rejected_scope"},
+                {"index": 3, "surface": "Y", "heard": "ワイ", "correct": "ウァイ", "outcome": "unfixable"},
+            ],
+            "rule_details": [
+                {"index": 4, "surface": "他", "heard": "タ", "correct": "ホカ", "rule": "hoka",
+                 "outcome": "rule_applied"},
+                {"index": 5, "surface": "人", "heard": "", "correct": "ヒト", "rule": "hito",
+                 "outcome": "rule_skipped"},
+            ],
+        }
+        items = reading_fix_items(report)
+        self.assertEqual([(i["surface"], i["kind"], i["outcome"]) for i in items],
+                         [("目視", "llm", "applied"), ("Y", "llm", "unfixable"),
+                          ("他", "rule", "rule_applied")])
+        self.assertEqual(reading_fix_items(None), [])
+
+    # ---- recurring_reading_candidates ----
+    def _days(self, surface, correct, days_ago_list, outcomes=None, kind="llm"):
+        for n, d in enumerate(days_ago_list):
+            key = self._key(d)
+            entries = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else []
+            entry = next((e for e in entries if e["date"] == key), None)
+            if entry is None:
+                entry = {"date": key, "items": []}
+                entries.append(entry)
+            entry["items"].append({"surface": surface, "heard": "ヨミ", "correct": correct, "kind": kind,
+                                   "outcome": (outcomes or ["applied"] * len(days_ago_list))[n]})
+            self.path.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+    def test_only_words_seen_on_3_or_more_days_are_returned(self) -> None:
+        self._days("目視", "モクシ", [0, 1, 2], ["applied", "unverified", "applied"])
+        self._days("人命", "ジンメイ", [0, 1])
+        (c,) = recurring_reading_candidates(self.site, "20261105")
+        self.assertEqual(c, {"surface": "目視", "correct": "モクシ", "days": 3,
+                             "applied_days": 2, "other_days": 1})
+
+    def test_rule_items_are_not_counted(self) -> None:
+        self._days("他", "ホカ", [0, 1, 2, 3], kind="rule")
+        self.assertEqual(recurring_reading_candidates(self.site, "20261105"), [])
+
+    def test_days_before_the_window_are_not_counted(self) -> None:
+        self._days("目視", "モクシ", [0, 1, 31, 40])
+        self.assertEqual(recurring_reading_candidates(self.site, "20261105"), [])
+        self._days("混沌", "コントン", [0, 15, 30])
+        self.assertEqual([c["surface"] for c in recurring_reading_candidates(self.site, "20261105")],
+                         ["混沌"])
+
+    def test_correct_spellings_are_grouped_by_normalized_kana(self) -> None:
+        self._days("今日", "キョウ", [0])
+        self._days("今日", "キョー", [1])
+        self._days("今日", "きょう", [2])
+        (c,) = recurring_reading_candidates(self.site, "20261105")
+        self.assertEqual(c["days"], 3)
+
+    def test_missing_or_broken_file_returns_empty(self) -> None:
+        self.assertEqual(recurring_reading_candidates(self.site, "20261105"), [])
+        self.path.write_text("{ not json", encoding="utf-8")
+        self.assertEqual(recurring_reading_candidates(self.site, "20261105"), [])
 
 
 class TestCharacterAdditions(unittest.TestCase):

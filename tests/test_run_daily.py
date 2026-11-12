@@ -371,5 +371,161 @@ class TestMainRunsToTheEnd(unittest.TestCase):
         self.assertIn("[ok] キャラ設定シートに追加: なし\n", buf.getvalue())
 
 
+class TestEpisodeRecordAndSummary(unittest.TestCase):
+    """放送ごとの記録(out/episode_record.json)・読みの修正履歴・実行サマリー。
+    どれが失敗しても放送（main）は最後まで進むこと。"""
+
+    T = TestMainRunsToTheEnd
+    SECRET = "ここは台本のセリフ全文なのでサマリーとログには出ない"
+    REPORT = {
+        "pointed": 3, "applied": 1, "unverified": 1, "rejected_scope": 1, "unfixable": 0,
+        "rule_applied": 1, "rule_noop": 0, "rule_skipped": 0, "query_failed": 0,
+        "details": [
+            {"index": 1, "surface": "目視", "heard": "メミ", "correct": "モクシ", "outcome": "applied"},
+            {"index": 2, "surface": "人命", "heard": "ヒトメイ", "correct": "ジンメイ", "outcome": "unverified"},
+            {"index": 2, "surface": "今日", "heard": "キョウ", "correct": "キョー", "outcome": "rejected_scope"},
+        ],
+        "rule_details": [
+            {"index": 2, "surface": "他", "heard": "タ", "correct": "ホカ", "rule": "hoka",
+             "outcome": "rule_applied"},
+        ],
+        "final_texts": [SECRET, "ruje"],
+    }
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.site = self.root / "site"
+        self.site.mkdir()
+        self.summary = self.root / "summary.md"
+        cfg = {"show": self.T.SHOW, "script": self.T.SCRIPT_CFG, "news_feeds": [],
+               "tts": {"engine": "aivis"}, "bgm": {}}
+        (self.root / "config.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+        fixed = self.T.FIXED_NOW
+
+        class _Frozen(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        script = {**self.T.SCRIPT, "lines": [
+            {"speaker": "eme", "text": self.SECRET, "section": "opening"},
+            {"speaker": "ruje", "text": "二行目", "section": "news"}]}
+        report = self.REPORT
+
+        def fake_build(lines, tts_cfg, reading_check_model=None, bgm_cfg=None, record=None):
+            record["tts_lines"] = [
+                {"index": 1, "speaker": "eme", "prepared_text": self.SECRET, "tts_text": "差し替え後", "reading": "ヨミ１"},
+                {"index": 2, "speaker": "ruje", "prepared_text": "二行目", "tts_text": "二行目", "reading": "ヨミ２"}]
+            record["reading_report"] = report
+            record["synth_failed"] = 0
+            return "x" * 90000   # len() が音声の長さ(ms)の代わり
+
+        def fake_export_mp3(audio, out_path):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"dummy-mp3")
+
+        self.addCleanup(patch.stopall)
+        patch.object(run_daily, "write_script", return_value=script).start()
+        self.build = patch.object(run_daily, "build", side_effect=fake_build).start()
+        patch.object(run_daily, "export_mp3", side_effect=fake_export_mp3).start()
+        patch.object(run_daily, "collect", return_value=[self.T.A, self.T.B, self.T.C]).start()
+        patch.object(run_daily, "load_recent_news_titles", return_value=[]).start()
+        patch.object(run_daily, "load_recent_glossary_terms", return_value=[]).start()
+        patch.object(run_daily, "upload_to_drive").start()
+        patch.object(run_daily, "upload_to_youtube").start()
+        patch.object(run_daily, "ROOT", self.root).start()
+        patch("src.run_daily.datetime", _Frozen).start()
+        patch("src.make_feed.datetime", _Frozen).start()
+
+    def _main(self, with_summary: bool = True) -> str:
+        env = {"RADIO_DISABLE_UPLOADS": "1"}
+        if with_summary:
+            env["GITHUB_STEP_SUMMARY"] = str(self.summary)
+        buf = io.StringIO()
+        with patch.dict("os.environ", env, clear=True), redirect_stdout(buf):
+            run_daily.main()
+        return buf.getvalue()
+
+    def test_episode_record_is_written(self) -> None:
+        self._main()
+        rec = json.loads((self.root / "out" / "episode_record.json").read_text(encoding="utf-8"))
+        from src.write_script import todays_banter_topic
+        self.assertEqual(rec["date"], self.T.DATE_KEY)
+        self.assertEqual(rec["script_model"], "test-model")
+        self.assertEqual(rec["reading_check_model"], "test-model")  # reading_check_model 未設定なら台本モデル
+        self.assertEqual(rec["title"], "AIの付けたタイトル")
+        self.assertEqual(rec["glossary_term"], "ベクトルDB")
+        self.assertEqual(rec["covered_news_indices"], [3, 1])
+        self.assertEqual(rec["banter_topic"], todays_banter_topic(self.T.FIXED_NOW)["topic"])
+        self.assertEqual(rec["duration_sec"], 90.0)
+        self.assertEqual(rec["lines"][0], {"index": 1, "speaker": "eme", "section": "opening",
+                                           "text": self.SECRET, "tts_text": "差し替え後", "reading": "ヨミ１"})
+        self.assertEqual(rec["synth_failed"], 0)
+        self.assertEqual(rec["reading_report"]["applied"], 1)
+        self.assertNotIn("final_texts", rec["reading_report"])
+
+    def test_build_receives_a_record_dict(self) -> None:
+        self._main()
+        self.assertIsInstance(self.build.call_args.kwargs["record"], dict)
+
+    def test_reading_fixes_are_recorded_without_the_notation_only_miss(self) -> None:
+        self._main()
+        data = json.loads((self.site / "reading_fixes_history.json").read_text(encoding="utf-8"))
+        self.assertEqual([e["date"] for e in data], [self.T.DATE_KEY])
+        self.assertEqual([(i["surface"], i["kind"], i["outcome"]) for i in data[0]["items"]],
+                         [("目視", "llm", "applied"), ("人命", "llm", "unverified"),
+                          ("他", "rule", "rule_applied")])
+        self._main()  # 同日の再実行は置き換え（増えない）
+        data = json.loads((self.site / "reading_fixes_history.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 1)
+
+    def test_recurring_candidates_are_logged_as_hints(self) -> None:
+        old = [{"surface": "目視", "heard": "メミ", "correct": "モクシ", "kind": "llm", "outcome": o}
+               for o in ("unverified",)]
+        (self.site / "reading_fixes_history.json").write_text(json.dumps(
+            [{"date": "20261003", "items": old}, {"date": "20261004", "items": old}], ensure_ascii=False),
+            encoding="utf-8")
+        log = self._main()
+        self.assertIn("[hint] 辞書・規則の候補: 「目視」→モクシ（3日: 修正1 / 見送り2）\n", log)
+        self.assertNotIn("人命", log.split("[hint]", 1)[1].split("\n", 1)[0])  # 2日 or 1日の語は出ない
+
+    def test_no_hint_when_nothing_recurs(self) -> None:
+        self.assertNotIn("[hint]", self._main())
+
+    def test_step_summary_is_appended_without_script_text(self) -> None:
+        self.summary.write_text("既存の内容\n", encoding="utf-8")
+        log = self._main()
+        md = self.summary.read_text(encoding="utf-8")
+        self.assertTrue(md.startswith("既存の内容\n"))
+        for want in ["放送サマリー 20261005", "1.5分", "2行 / ", "test-model", "お題: ",
+                     "規則で修正1件", "AIの指摘3件", "修正1件", "検証不能1件", "範囲不審1件", "修正できず0件",
+                     "「目視」メミ→モクシ（AI）", "「他」タ→ホカ（規則）"]:
+            self.assertIn(want, md)
+        self.assertNotIn("人命", md.split("### 書き換えた語")[1])  # 書き換えていない語は一覧に出ない
+        self.assertNotIn(self.SECRET, md)
+        self.assertNotIn(self.SECRET, log)
+
+    def test_no_summary_file_is_written_without_the_env_var(self) -> None:
+        self._main(with_summary=False)
+        self.assertFalse(self.summary.exists())
+
+    def test_failures_in_record_history_and_summary_never_stop_the_broadcast(self) -> None:
+        targets = [("_build_episode_record", "放送記録の書き出しに失敗"),
+                   ("record_reading_fixes", "読みの修正履歴の記録に失敗"),
+                   ("recurring_reading_candidates", "読みの候補の集計に失敗"),
+                   ("_write_step_summary", "実行サマリーの出力に失敗")]
+        for name, warning in targets:
+            with self.subTest(failing=name):
+                with patch.object(run_daily, name, side_effect=RuntimeError(self.SECRET)):
+                    log = self._main()
+                self.assertIn(f"[warn] {warning}（放送は続行）: RuntimeError\n", log)
+                self.assertNotIn(self.SECRET, log)   # 例外メッセージ(=セリフを含みうる)は出さない
+                self.assertIn("=== 放送完了！いってらっしゃい ===", log)
+                self.assertTrue((self.site / "feed.xml").exists())
+                self.assertTrue((self.site / "latest.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

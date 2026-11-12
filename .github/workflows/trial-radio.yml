@@ -105,6 +105,7 @@ jobs:
           path: |
             out/today.mp3
             out/script.json
+            out/episode_record.json
             out/trial_meta.txt
           retention-days: 1
           if-no-files-found: warn

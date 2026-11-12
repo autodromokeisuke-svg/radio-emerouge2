@@ -128,5 +128,91 @@ class TestRunFixtureRulesOnly(unittest.TestCase):
         self.assertIn("1/1（100%）", md)  # 再現率 = (fixed + fixed_by_rule) / 現状誤読
 
 
+class TestMustKeep(unittest.TestCase):
+    """must_keep（直してはいけない語）の「誤った書き換え」「元から誤読」の数え方。"""
+
+    def _engine(self) -> MagicMock:
+        readings = {
+            "その人はすごい": "ソノジンワスゴイ",      # 規則で人→ひと に変わる（ジン→ヒト）
+            "そのひとはすごい": "ソノヒトワスゴイ",
+            "他にもある": "タニモアル",                # 規則で他→ほか に変わる。元から「ホカ」ではない
+            "ほかにもある": "ホカニモアル",
+            "ふつうの文": "フツウノブン",              # 何も変わらない
+        }
+
+        def fake_query(role: str, text: str):
+            return {"accent_phrases": [{"moras": [{"text": c} for c in readings[text]]}]}
+
+        engine = MagicMock()
+        engine.query.side_effect = fake_query
+        return engine
+
+    def _data(self) -> dict:
+        return {
+            "lines": [{"speaker": "eme", "text": "その人はすごい"},
+                      {"speaker": "ruje", "text": "他にもある"},
+                      {"speaker": "eme", "text": "ふつうの文"}],
+            "expected": [],
+            "must_keep": [{"line": 1, "surface": "人", "reading": "ジン"},
+                          {"line": 2, "surface": "他", "reading": "ホカ"},
+                          {"line": 3, "surface": "文", "reading": "フツウ"}],
+        }
+
+    def _run(self, data: dict | None = None) -> dict:
+        with patch("src.build_audio.find_misreadings") as fm:
+            res = reading_eval.run_fixture(self._engine(), "t", data or self._data(),
+                                           [reading_eval.RULES_ONLY])
+        fm.assert_not_called()
+        return res
+
+    def test_broken_keep_and_already_wrong_are_counted_separately(self) -> None:
+        m = self._run()["per_model"][reading_eval.RULES_ONLY]
+        # 守る対象は「元から期待の読みを含む」1行目と3行目。2行目は元から誤読（対象外）
+        self.assertEqual(m["keep_total"], 2)
+        self.assertEqual(m["broken_keep"], [{"line": 1, "surface": "人", "expected": "ジン"}])
+        self.assertEqual(m["keep_already_wrong"], [{"line": 2, "surface": "他", "expected": "ホカ"}])
+
+    def test_fixture_without_must_keep_is_zero(self) -> None:
+        data = self._data()
+        del data["must_keep"]
+        m = self._run(data)["per_model"][reading_eval.RULES_ONLY]
+        self.assertEqual((m["keep_total"], m["broken_keep"], m["keep_already_wrong"]), (0, [], []))
+        self.assertIn("| 0/0 |", reading_eval._build_markdown([self._run(data)], [reading_eval.RULES_ONLY]))
+
+    def test_markdown_has_the_column_and_the_lists(self) -> None:
+        md = reading_eval._build_markdown([self._run()], [reading_eval.RULES_ONLY])
+        self.assertIn("誤った書き換え |", md)
+        self.assertIn("| 1/2 |", md)
+        self.assertIn("誤った書き換え 1/2", md)
+        self.assertIn("1行目 「人」 期待の読み ジン", md)
+        self.assertIn("元から誤読", md)
+        self.assertIn("2行目 「他」 期待の読み ホカ", md)
+
+    def test_unchanged_reading_is_not_broken(self) -> None:
+        data = self._data()
+        data["must_keep"] = [data["must_keep"][2]]
+        m = self._run(data)["per_model"][reading_eval.RULES_ONLY]
+        self.assertEqual((m["keep_total"], m["broken_keep"]), (1, []))
+
+
+class TestGuardKeepFixture(unittest.TestCase):
+    def test_guard_keep_json_has_the_agreed_shape(self) -> None:
+        import json
+        path = Path(__file__).resolve().parent / "fixtures" / "reading_eval" / "guard_keep.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["lines"]), 12)
+        self.assertEqual(data["expected"], [])
+        self.assertEqual(len(data["must_keep"]), 12)
+        for k in data["must_keep"]:
+            self.assertTrue(1 <= k["line"] <= 12)
+            self.assertIn(k["surface"], data["lines"][k["line"] - 1]["text"])
+            self.assertTrue(k["reading"])
+        self.assertEqual([k["line"] for k in data["must_keep"]], list(range(1, 13)))
+        self.assertEqual([ln["speaker"] for ln in data["lines"]], ["eme", "ruje"] * 6)
+        self.assertNotIn(path.name, [reading_eval.DICT_CHECKS_FILENAME])
+        names = [n for n, _ in reading_eval._load_fixtures(path.parent)]
+        self.assertIn("guard_keep", names)
+
+
 if __name__ == "__main__":
     unittest.main()

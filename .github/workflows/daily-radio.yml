@@ -150,6 +150,20 @@ jobs:
           export SITE_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
           python -m src.run_daily
 
+      - name: 放送ごとの記録を保存（台本つき。公開はしない）
+        # out/episode_record.json は台本の原文・読みの修正内容を含む。公開中の音声の保存期間
+        # （config.yaml の episodes_keep=14）と同じ14日で消し、台本が音声より長く残らないようにする。
+        # 収録が失敗した日も、台本の失敗ダンプ(last_script_error_*.txt)を拾えるよう !cancelled() で実行する。
+        if: ${{ !cancelled() && steps.skip.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: episode-record-${{ github.run_id }}
+          path: |
+            out/episode_record.json
+            out/last_script_error_*.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: 静的ページをsiteへ配置
         # site/ は gh-pages をチェックアウトして作るため、main側の site/ に置いたファイルは
         # 残らない。Google OAuth の必須項目であるプライバシーポリシー・利用規約は

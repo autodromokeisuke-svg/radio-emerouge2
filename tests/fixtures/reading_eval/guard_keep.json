@@ -1,0 +1,115 @@
+{
+  "lines": [
+    {
+      "speaker": "eme",
+      "text": "最終的には、担当者が目視で確認するのが大事だよね。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "便利さとリスクは表裏一体なんだよね。"
+    },
+    {
+      "speaker": "eme",
+      "text": "情報が多すぎて、現場は混沌としてるみたい。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "人命に関わる判断は、やっぱり慎重にしないとね。"
+    },
+    {
+      "speaker": "eme",
+      "text": "小さな設定ミスが命取りになることもあるんだって。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "結局は、使う人次第ってことだね。"
+    },
+    {
+      "speaker": "eme",
+      "text": "各社が来月から実証実験を行うとのこと。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "今日は十一月の十日、火曜日です。"
+    },
+    {
+      "speaker": "eme",
+      "text": "締め切りは来月の七日だって。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "発表は二十日の予定みたい。"
+    },
+    {
+      "speaker": "eme",
+      "text": "著作権の扱いは、国によって違うんだよね。"
+    },
+    {
+      "speaker": "ruje",
+      "text": "その他の機能は、次回くわしく紹介するね。"
+    }
+  ],
+  "expected": [],
+  "must_keep": [
+    {
+      "line": 1,
+      "surface": "目視",
+      "reading": "モクシ"
+    },
+    {
+      "line": 2,
+      "surface": "表裏一体",
+      "reading": "ヒョウリイッタイ"
+    },
+    {
+      "line": 3,
+      "surface": "混沌",
+      "reading": "コントン"
+    },
+    {
+      "line": 4,
+      "surface": "人命",
+      "reading": "ジンメイ"
+    },
+    {
+      "line": 5,
+      "surface": "命取り",
+      "reading": "イノチトリ"
+    },
+    {
+      "line": 6,
+      "surface": "人次第",
+      "reading": "ヒトシダイ"
+    },
+    {
+      "line": 7,
+      "surface": "行う",
+      "reading": "オコナウ"
+    },
+    {
+      "line": 8,
+      "surface": "十日",
+      "reading": "トオカ"
+    },
+    {
+      "line": 9,
+      "surface": "七日",
+      "reading": "ナノカ"
+    },
+    {
+      "line": 10,
+      "surface": "二十日",
+      "reading": "ハツカ"
+    },
+    {
+      "line": 11,
+      "surface": "著作権",
+      "reading": "チョサ"
+    },
+    {
+      "line": 12,
+      "surface": "その他",
+      "reading": "ソノタ"
+    }
+  ]
+}

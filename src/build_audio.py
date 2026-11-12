@@ -600,6 +600,7 @@ def _run_reading_check_with_report(engine: Any, lines: list[dict[str, str]],
     report = _apply_reading_corrections(engine, lines, texts, queries, corrections)
     report.update(rule_report)
     report["query_failed"] = query_failed
+    report["final_texts"] = texts  # 規則・読み検証の差し替え後に、実際にエンジンへ渡す文
     print(f"[ok] 読み検証: 指摘{report['pointed']}件 / 修正{report['applied']}件 / "
           f"検証不能{report['unverified']}件 / 範囲不審で除外{report['rejected_scope']}件 / "
           f"修正できず{report['unfixable']}件 / 読み検証対象外{query_failed}件 / "
@@ -727,13 +728,38 @@ def _prepare_bgm(lines: list[dict[str, str]], bgm_cfg: dict[str, Any] | None):
     return settings, plan, main, news
 
 
+def _fill_tts_record(record: dict[str, Any], lines: list[dict[str, str]],
+                     prepared_texts: list[str], queries: list[dict | None],
+                     reading_report: dict[str, Any] | None, failed: int) -> None:
+    """放送の記録（out/episode_record.json の元）を record へ書き込む。失敗しても合成は止めない。"""
+    try:
+        final_texts = (reading_report or {}).get("final_texts") or prepared_texts
+        tts_lines = []
+        for i, ln in enumerate(lines):
+            q = queries[i]
+            tts_lines.append({
+                "index": i + 1, "speaker": ln["speaker"],
+                "prepared_text": prepared_texts[i],
+                "tts_text": final_texts[i] if i < len(final_texts) else prepared_texts[i],
+                "reading": extract_phrases(q) if q is not None else "",
+            })
+        record["tts_lines"] = tts_lines
+        record["reading_report"] = reading_report
+        record["synth_failed"] = failed
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 収録の記録の組み立てに失敗（収録は続行）: {type(e).__name__}")
+
+
 def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
                reading_check_model: str | None = None,
-               lead_in_ms: int = 0) -> tuple[AudioSegment, list[int]]:
+               lead_in_ms: int = 0,
+               record: dict[str, Any] | None = None) -> tuple[AudioSegment, list[int]]:
     """全セリフを合成して声だけの放送を作り、(放送, 各セリフの開始位置ms) を返す。
 
     lead_in_ms は先頭に足す無音（BGMの曲だけ流すリードイン用）の長さ。
     BGMを重ねる処理(add_bgm)とは分けてあり、BGMの音量調整時は声の合成結果を使い回せる。
+    record（dict）を渡すと、tts_lines / reading_report / synth_failed を書き込む
+    （放送ごとの記録用。None なら何もしない）。
     """
     engine = get_engine(tts_cfg)
     engine.prepare()
@@ -756,20 +782,24 @@ def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
     prepared_texts = [_fix_known_misreadings(normalize_for_tts(ln["text"]))
                       for ln in lines]
     queries: list[dict | None] = [None] * total
+    reading_report: dict[str, Any] | None = None
 
     if reading_check_model and getattr(engine, "supports_reading_check", False):
         try:
-            queries = _run_reading_check(engine, lines, prepared_texts, reading_check_model)
+            queries, reading_report = _run_reading_check_with_report(
+                engine, lines, prepared_texts, reading_check_model)
         except _ReadingCheckQueryError as e:
             # このメッセージは台本の行を含まない（_ReadingCheckQueryErrorのdocstring参照）。
             # セリフ番号が分かるので、次回同じ箇所で再現するかの判別に使える。
             print(f"[warn] 読み検証フェーズに失敗。通常合成にフォールバックします: {e}")
             queries = [None] * total
+            reading_report = None
         except Exception as e:  # noqa: BLE001
             # type名だけを出す（エンジンのエラーメッセージにはリクエストURL＝
             # 台本の行そのものが含まれうるため、行全体をログに出さないため）
             print(f"[warn] 読み検証フェーズに失敗。通常合成にフォールバックします: {type(e).__name__}")
             queries = [None] * total
+            reading_report = None
 
     failed = 0
     starts_ms = [0] * total  # 各セリフが show の中で始まる位置（BGMの区間切り替えに使う）
@@ -798,6 +828,9 @@ def synthesize(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
         if i % 10 == 0 or i == total:
             print(f"[..] 収録中 {i}/{total}")
 
+    if record is not None:
+        _fill_tts_record(record, lines, prepared_texts, queries, reading_report, failed)
+
     if failed > total // 4:
         raise RuntimeError(f"合成失敗が多すぎる ({failed}/{total})。エンジン状態を確認して。")
 
@@ -823,11 +856,12 @@ def add_bgm(show: AudioSegment, starts_ms: list[int], bgm_ctx) -> AudioSegment:
 
 def build(lines: list[dict[str, str]], tts_cfg: dict[str, Any],
          reading_check_model: str | None = None,
-         bgm_cfg: dict[str, Any] | None = None) -> AudioSegment:
+         bgm_cfg: dict[str, Any] | None = None,
+         record: dict[str, Any] | None = None) -> AudioSegment:
     bgm_ctx = _prepare_bgm(lines, bgm_cfg)
     lead_in_ms = int(bgm_ctx[0]["lead_in_ms"]) if bgm_ctx else 0
 
-    show, starts_ms = synthesize(lines, tts_cfg, reading_check_model, lead_in_ms)
+    show, starts_ms = synthesize(lines, tts_cfg, reading_check_model, lead_in_ms, record=record)
     if bgm_ctx:
         show = add_bgm(show, starts_ms, bgm_ctx)
 

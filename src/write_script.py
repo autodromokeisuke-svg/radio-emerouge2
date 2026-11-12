@@ -195,6 +195,15 @@ def _load_banter_topics() -> list[dict[str, str]]:
     return result
 
 
+def todays_banter_topic(now: datetime | None = None) -> dict[str, str]:
+    """今日（JST）のお題 {"lead": "eme"|"ruje", "topic": str} を返す（放送記録用。選び方は _banter_block と同じ）。"""
+    now = now or datetime.now(JST)
+    if now.tzinfo is not None:
+        now = now.astimezone(JST)
+    topics = _load_banter_topics()
+    return topics[now.date().toordinal() % len(topics)]
+
+
 def _banter_block(now: datetime | None = None) -> str:
     """今日（JST）のオープニング用「雑談のお題」の指示ブロックを返す。
 

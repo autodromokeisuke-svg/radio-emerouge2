@@ -139,18 +139,28 @@ def run_dict_checks(engine: Any, checks: list[dict[str, Any]], role: str = "eme"
     return results
 
 
+def _baseline_readings(engine: Any, lines: list[dict[str, str]],
+                       prepared_texts: list[str]) -> list[str]:
+    """指摘フェーズ前（パイプラインを通す前）の、各行の読み。"""
+    readings = []
+    for i, text in enumerate(prepared_texts):
+        q = engine.query(lines[i]["speaker"], text)
+        readings.append(extract_reading(q))
+    return readings
+
+
 def _baseline_misread_indices(engine: Any, lines: list[dict[str, str]],
-                              prepared_texts: list[str], expected: list[dict[str, Any]]) -> set[int]:
+                              prepared_texts: list[str], expected: list[dict[str, Any]],
+                              readings: list[str] | None = None) -> set[int]:
     """指摘フェーズ前、現状のエンジンで各ラベルが実際に誤読されているかを確認する。
 
     ラベル（expected）のうち、既に正しく読めているものは「再現率」の分母から
     除く（読み検証が直したかどうかを測る指標なので、元々直っていたものは対象外）。
     戻り値は誤読されているラベルのindex（expectedリスト内の位置）集合。
+    readings を渡すと、エンジンへ問い合わせ直さずその読みを使う（must_keep と共用）。
     """
-    readings = []
-    for i, text in enumerate(prepared_texts):
-        q = engine.query(lines[i]["speaker"], text)
-        readings.append(extract_reading(q))
+    if readings is None:
+        readings = _baseline_readings(engine, lines, prepared_texts)
 
     misread: set[int] = set()
     for idx, item in enumerate(expected):
@@ -167,8 +177,25 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
     expected = data["expected"]
     prepared_texts = [_prepare(ln["text"]) for ln in lines]
 
-    baseline_misread = _baseline_misread_indices(engine, lines, prepared_texts, expected)
-    print(f"[{name}] 台本{len(lines)}行 / ラベル{len(expected)}件 / 現状誤読{len(baseline_misread)}件")
+    baseline_readings = _baseline_readings(engine, lines, prepared_texts)
+    baseline_misread = _baseline_misread_indices(engine, lines, prepared_texts, expected,
+                                                 readings=baseline_readings)
+
+    # 「直してはいけない語」(must_keep): パイプラインを通す前から期待の読みを含む項目だけが
+    # 守る対象。前から含まれていない項目は「元から誤読」として別に数える（誤った書き換えではない）
+    keep_targets: list[dict[str, Any]] = []
+    keep_already_wrong: list[dict[str, Any]] = []
+    for item in data.get("must_keep") or []:
+        pos = item["line"] - 1
+        if not (0 <= pos < len(baseline_readings)):
+            continue
+        entry = {"line": item["line"], "surface": item["surface"], "expected": item["reading"]}
+        if kana_contains(baseline_readings[pos], item["reading"]):
+            keep_targets.append(entry)
+        else:
+            keep_already_wrong.append(entry)
+    print(f"[{name}] 台本{len(lines)}行 / ラベル{len(expected)}件 / 現状誤読{len(baseline_misread)}件"
+          f" / 守る語{len(keep_targets)}件（元から誤読{len(keep_already_wrong)}件）")
 
     expected_lines = {item["line"] for item in expected}
     per_model: dict[str, Any] = {}
@@ -209,6 +236,15 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
         unlabelled_rule_fixes = [d for d in report.get("rule_details", [])
                                  if d["outcome"] == "rule_applied" and d["index"] not in expected_lines]
 
+        # 守る対象のうち、パイプライン後の読みから期待の読みが消えたもの＝誤った書き換え。
+        # 問い合わせ失敗でクエリが無い行は書き換えられていないので、元の読みで判定する
+        broken_keep = []
+        for entry in keep_targets:
+            q = queries[entry["line"] - 1]
+            final = extract_reading(q) if q is not None else baseline_readings[entry["line"] - 1]
+            if not kana_contains(final, entry["expected"]):
+                broken_keep.append(dict(entry))
+
         usage = reading_check_mod.last_usage
         price = _price_for(model)
         cost = None
@@ -226,13 +262,17 @@ def run_fixture(engine: Any, name: str, data: dict[str, Any], models: list[str])
             "rejected_scope": report["rejected_scope"],
             "unfixable": report["unfixable"],
             "unlabelled_fixes": unlabelled_fixes,
+            "broken_keep": broken_keep,
+            "keep_total": len(keep_targets),
+            "keep_already_wrong": list(keep_already_wrong),
             "usage": usage,
             "cost_usd": cost,
         }
         print(f"[{name}] {_model_label(model)}: 修正{fixed}+規則{fixed_by_rule}/{len(baseline_misread)} / "
              f"適用{report['applied']}件 / 検証不能{report['unverified']}件 / "
              f"範囲不審で除外{report['rejected_scope']}件 / 修正できず{report['unfixable']}件 / "
-             f"ラベル外の修正{len(unlabelled_fixes)}件 / ラベル外の規則適用{len(unlabelled_rule_fixes)}件")
+             f"ラベル外の修正{len(unlabelled_fixes)}件 / ラベル外の規則適用{len(unlabelled_rule_fixes)}件 / "
+             f"誤った書き換え{len(broken_keep)}/{len(keep_targets)}")
 
     return {"name": name, "n_lines": len(lines), "n_expected": len(expected),
            "baseline_misread": len(baseline_misread), "per_model": per_model}
@@ -263,8 +303,8 @@ def _build_dict_checks_markdown(dict_results: list[dict[str, Any]]) -> str:
 def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
     lines = ["## 読み検証 評価結果", "", "### モデル別サマリー（全台本合計）", "",
              "| モデル | ラベル誤読数 | 修正数 | 規則で修正 | 再現率 | 検証不能 | 範囲不審で除外 | 修正できず | "
-             "ラベル外修正 | 入力トークン | 出力トークン | 概算コスト |",
-             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "ラベル外修正 | 誤った書き換え | 入力トークン | 出力トークン | 概算コスト |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for model in models:
         total_expected = sum(r["baseline_misread"] for r in results)
         total_fixed = sum(r["per_model"][model]["fixed"] for r in results)
@@ -273,6 +313,8 @@ def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
         total_rejected_scope = sum(r["per_model"][model]["rejected_scope"] for r in results)
         total_unfixable = sum(r["per_model"][model]["unfixable"] for r in results)
         total_unlabelled = sum(len(r["per_model"][model]["unlabelled_fixes"]) for r in results)
+        total_broken = sum(len(r["per_model"][model]["broken_keep"]) for r in results)
+        total_keep = sum(r["per_model"][model]["keep_total"] for r in results)
         total_in = sum((r["per_model"][model]["usage"] or {}).get("input_tokens", 0) for r in results)
         total_out = sum((r["per_model"][model]["usage"] or {}).get("output_tokens", 0) for r in results)
         costs = [r["per_model"][model]["cost_usd"] for r in results]
@@ -282,7 +324,8 @@ def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
             recall_str += f"（{(total_fixed + total_rule) / total_expected:.0%}）"
         lines.append(f"| {_model_label(model)} | {total_expected} | {total_fixed} | {total_rule} | {recall_str} | "
                      f"{total_unverified} | {total_rejected_scope} | {total_unfixable} | "
-                     f"{total_unlabelled} | {total_in} | {total_out} | {cost_str} |")
+                     f"{total_unlabelled} | {total_broken}/{total_keep} | "
+                     f"{total_in} | {total_out} | {cost_str} |")
     lines.append("")
 
     lines.append("### 台本別内訳")
@@ -308,6 +351,16 @@ def _build_markdown(results: list[dict[str, Any]], models: list[str]) -> str:
                 for d in m["unlabelled_rule_fixes"]:
                     lines.append(f"    - {d['index']}行目 「{d['surface']}」 {d['heard']}→{d['correct']}"
                                  f"（規則 {d['rule']}）")
+            if m["broken_keep"]:
+                lines.append(f"  - 誤った書き換え {len(m['broken_keep'])}/{m['keep_total']}"
+                             "（直してはいけない語の読みが変わった）:")
+                for d in m["broken_keep"]:
+                    lines.append(f"    - {d['line']}行目 「{d['surface']}」 期待の読み {d['expected']}")
+            if m["keep_already_wrong"]:
+                lines.append(f"  - 元から誤読（パイプライン前から期待の読みでない。誤った書き換えには数えない）"
+                             f" {len(m['keep_already_wrong'])}件:")
+                for d in m["keep_already_wrong"]:
+                    lines.append(f"    - {d['line']}行目 「{d['surface']}」 期待の読み {d['expected']}")
         lines.append("")
     return "\n".join(lines)
 

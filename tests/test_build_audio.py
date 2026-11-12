@@ -669,5 +669,97 @@ class TestSynthesizeSplitRecovery(unittest.TestCase):
         self.assertGreater(len(show), 0)  # 他の4本は収録されている
 
 
+class _FakeReadingSynthEngine(_FakeEngine):
+    """読み検証つきのsynthesize()用。query（_FakeEngine）に加えて合成も持つ。"""
+
+    supports_reading_check = True
+
+    def prepare(self) -> None:
+        pass
+
+    def synth(self, role: str, text: str) -> AudioSegment:
+        return AudioSegment.silent(duration=50)
+
+    def synth_from_query(self, role: str, query_json: dict) -> AudioSegment:
+        return AudioSegment.silent(duration=50)
+
+
+class TestSynthesizeRecord(unittest.TestCase):
+    """synthesize()/build() の record 引数（放送ごとの記録）。"""
+
+    def _run(self, lines, engine, model, record):
+        from src.build_audio import synthesize
+        with patch("src.build_audio.get_engine", return_value=engine),                 patch("src.build_audio.find_misreadings", return_value=[]):
+            return synthesize(lines, tts_cfg={"pause_ms": 10}, reading_check_model=model,
+                              record=record)
+
+    def _engine(self) -> _FakeReadingSynthEngine:
+        return _FakeReadingSynthEngine({
+            "その人は他にも": _q("ソノジンワタニモ"),
+            "その人はほかにも": _q("ソノジンワホカニモ"),
+            "そのひとはほかにも": _q("ソノヒトワホカニモ"),
+        })
+
+    def test_without_record_behaves_as_before(self) -> None:
+        lines = [{"speaker": "eme", "text": "その人は他にも"}]
+        with contextlib.redirect_stdout(io.StringIO()):
+            show, starts = self._run(lines, self._engine(), "m", None)
+        self.assertEqual(len(starts), 1)
+        self.assertGreater(len(show), 0)
+
+    def test_record_gets_tts_lines_report_and_failed_count(self) -> None:
+        lines = [{"speaker": "eme", "text": "その人は他にも"}]
+        record: dict = {}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self._run(lines, self._engine(), "m", record)
+        self.assertEqual(record["synth_failed"], 0)
+        self.assertIsInstance(record["reading_report"], dict)
+        self.assertEqual(record["reading_report"]["rule_applied"], 2)
+        (t,) = record["tts_lines"]
+        self.assertEqual(t["index"], 1)
+        self.assertEqual(t["speaker"], "eme")
+        self.assertEqual(t["prepared_text"], "その人は他にも")
+        # 規則で差し替えた後の文が、実際にエンジンへ渡した文として残る
+        self.assertEqual(t["tts_text"], "そのひとはほかにも")
+        self.assertEqual(t["reading"], "ソノヒトワホカニモ")
+
+    def test_record_without_reading_check_has_no_report(self) -> None:
+        lines = [{"speaker": "eme", "text": "おはよう"}]
+        engine = _FakeSynthEngine(lambda t: False)
+        record: dict = {}
+        from src.build_audio import synthesize
+        with patch("src.build_audio.get_engine", return_value=engine), \
+                contextlib.redirect_stdout(io.StringIO()):
+            synthesize(lines, tts_cfg={"pause_ms": 10}, record=record)
+        self.assertIsNone(record["reading_report"])
+        self.assertEqual(record["synth_failed"], 0)
+        self.assertEqual(record["tts_lines"], [{"index": 1, "speaker": "eme",
+                                                "prepared_text": "おはよう",
+                                                "tts_text": "おはよう", "reading": ""}])
+
+    def test_synth_failed_count_is_recorded(self) -> None:
+        lines = [{"speaker": "eme", "text": "AAAA"}] + [{"speaker": "ruje", "text": f"ok{i}"} for i in range(7)]
+        engine = _FakeSynthEngine(lambda t: "A" in t)
+        record: dict = {}
+        from src.build_audio import synthesize
+        with patch("src.build_audio.get_engine", return_value=engine), \
+                contextlib.redirect_stdout(io.StringIO()):
+            synthesize(lines, tts_cfg={"pause_ms": 10}, record=record)
+        self.assertEqual(record["synth_failed"], 1)
+
+    def test_record_assembly_failure_does_not_stop_synthesis(self) -> None:
+        class _BadRecord(dict):
+            def __setitem__(self, key, value):
+                raise RuntimeError("書き込めない")
+
+        lines = [{"speaker": "eme", "text": "その人は他にも"}]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            show, starts = self._run(lines, self._engine(), "m", _BadRecord())
+        self.assertGreater(len(show), 0)
+        self.assertEqual(len(starts), 1)
+        self.assertIn("[warn] 収録の記録の組み立てに失敗（収録は続行）: RuntimeError", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from .build_audio import build, export_mp3
+from .build_audio import _truncate_log, build, export_mp3
 from .collect_news import collect, filter_recent
 from .make_feed import (
     JST,
@@ -33,13 +33,16 @@ from .make_feed import (
     load_character_additions,
     load_recent_glossary_terms,
     load_recent_news_titles,
+    reading_fix_items,
+    recurring_reading_candidates,
     record_character_additions,
+    record_reading_fixes,
     record_used_news,
     write_latest_json,
 )
 from .upload_drive import upload_to_drive
 from .upload_youtube import upload_to_youtube
-from .write_script import write_script
+from .write_script import todays_banter_topic, write_script
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -111,6 +114,76 @@ def _validated_publish_from(show_cfg: dict) -> str:
                      f"（例: 20260901）。現在値: {raw!r}")
 
 
+def _warn_continue(what: str, e: Exception) -> None:
+    """記録まわりの処理の失敗を、放送を止めずに警告として残す（例外は型名のみ。セリフを含みうるため）。"""
+    print(f"[warn] {what}（放送は続行）: {type(e).__name__}")
+
+
+def _build_episode_record(script: dict, tts_record: dict, now: datetime, audio: object,
+                          script_model: str, reading_check_model: str) -> dict:
+    """out/episode_record.json の中身を組み立てる（台本の原文と、実際にエンジンへ渡した文・読みを並べる）。"""
+    tts_by_index = {t["index"]: t for t in tts_record.get("tts_lines") or []}
+    lines = []
+    for i, ln in enumerate(script.get("lines") or [], 1):
+        t = tts_by_index.get(i, {})
+        lines.append({"index": i, "speaker": ln.get("speaker", ""), "section": ln.get("section", ""),
+                      "text": ln.get("text", ""), "tts_text": t.get("tts_text", ""),
+                      "reading": t.get("reading", "")})
+    report = tts_record.get("reading_report")
+    if isinstance(report, dict):
+        # 差し替え後の全文は lines[].tts_text にあるので、ここには重ねて持たない
+        report = {k: v for k, v in report.items() if k != "final_texts"}
+    return {
+        "date": now.strftime("%Y%m%d"),
+        "script_model": script_model,
+        "reading_check_model": reading_check_model,
+        "title": script.get("title", ""),
+        "glossary_term": script.get("glossary_term", ""),
+        "covered_news_indices": script.get("covered_news_indices") or [],
+        "banter_topic": todays_banter_topic(now)["topic"],
+        "duration_sec": round(len(audio) / 1000, 1),
+        "lines": lines,
+        "reading_report": report,
+        "synth_failed": tts_record.get("synth_failed", 0),
+    }
+
+
+def _write_step_summary(info: dict) -> None:
+    """GITHUB_STEP_SUMMARY があれば、放送の要約をMarkdownで追記する。セリフ全文は出さない。"""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    out = [f"## 放送サマリー {info['date']}", ""]
+    out.append(f"- 収録尺: {info['duration_sec'] / 60:.1f}分")
+    out.append(f"- セリフ: {info['n_lines']}行 / {info['n_chars']}文字")
+    out.append(f"- 台本モデル: {info['script_model']} / 読み検証モデル: {info['reading_check_model']}")
+    out.append(f"- お題: {info['banter_topic']}")
+    report = info.get("reading_report")
+    if isinstance(report, dict):
+        out.append(f"- 読み検証: 規則で修正{report.get('rule_applied', 0)}件 / "
+                   f"AIの指摘{report.get('pointed', 0)}件 / 修正{report.get('applied', 0)}件 / "
+                   f"検証不能{report.get('unverified', 0)}件 / 範囲不審{report.get('rejected_scope', 0)}件 / "
+                   f"修正できず{report.get('unfixable', 0)}件")
+        fixes = [i for i in reading_fix_items(report) if i["outcome"] in ("applied", "rule_applied")]
+        if fixes:
+            out += ["", "### 書き換えた語", ""]
+            for i in fixes:
+                who = "規則" if i["kind"] == "rule" else "AI"
+                out.append(f"- 「{_truncate_log(i['surface'])}」{_truncate_log(i['heard'])}"
+                           f"→{_truncate_log(i['correct'])}（{who}）")
+    else:
+        out.append("- 読み検証: 実施なし（または失敗して通常合成）")
+    cands = info.get("candidates") or []
+    if cands:
+        out += ["", "### 辞書・規則の候補", ""]
+        for c in cands:
+            out.append(f"- 「{_truncate_log(c['surface'])}」→{_truncate_log(c['correct'])}"
+                       f"（{c['days']}日: 修正{c['applied_days']} / 見送り{c['other_days']}）")
+    out.append("")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
 def main() -> None:
     site = ROOT / "site"
     if _should_skip_scheduled_run(site):
@@ -170,10 +243,31 @@ def main() -> None:
     # 足す（未設定なら従来どおり台本生成と同じモデル）。config.yaml自体は変更しない
     # （番組の中身に関わる設定はケイスケの承認が必要なため、今回はフォールバックのみ実装）
     reading_check_model = cfg["script"].get("reading_check_model") or cfg["script"]["model"]
+    tts_record: dict = {}   # 収録の記録（build が埋める。失敗しても放送には影響しない）
     audio = build(script["lines"], cfg["tts"], reading_check_model=reading_check_model,
-                  bgm_cfg=cfg.get("bgm", {}))
+                  bgm_cfg=cfg.get("bgm", {}), record=tts_record)
     out_mp3 = ROOT / "out" / "today.mp3"
     export_mp3(audio, out_mp3)
+
+    # 放送ごとの記録（台本つき）。out/ は配信されない。ワークフローがartifactとして14日だけ保存する
+    summary_info: dict = {}
+    try:
+        record = _build_episode_record(script, tts_record, datetime.now(JST), audio,
+                                       script_cfg["model"], reading_check_model)
+        (ROOT / "out").mkdir(parents=True, exist_ok=True)
+        (ROOT / "out" / "episode_record.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+        summary_info = {
+            "date": record["date"], "duration_sec": record["duration_sec"],
+            "n_lines": len(record["lines"]),
+            "n_chars": sum(len(ln["text"]) for ln in record["lines"]),
+            "script_model": record["script_model"],
+            "reading_check_model": record["reading_check_model"],
+            "banter_topic": record["banter_topic"],
+            "reading_report": tts_record.get("reading_report"),
+        }
+    except Exception as e:  # noqa: BLE001
+        _warn_continue("放送記録の書き出しに失敗", e)
 
     now = datetime.now(JST)
     covered_indices = script.get("covered_news_indices") or []
@@ -212,6 +306,24 @@ def main() -> None:
     if not new_character_facts:
         print("[ok] キャラ設定シートに追加: なし")
 
+    # 読みの修正履歴（毎日同じ語を直している/直せていないことに気づくため。公開サイトの一部として
+    # 翌日以降へ引き継がれる）。読み検証をしなかった日は記録しない
+    try:
+        if isinstance(tts_record.get("reading_report"), dict):
+            record_reading_fixes(ROOT / "site", now.strftime("%Y%m%d"),
+                                 reading_fix_items(tts_record["reading_report"]))
+    except Exception as e:  # noqa: BLE001
+        _warn_continue("読みの修正履歴の記録に失敗", e)
+    try:
+        candidates = recurring_reading_candidates(ROOT / "site", now.strftime("%Y%m%d"))
+        summary_info["candidates"] = candidates
+        for c in candidates:
+            print(f"[hint] 辞書・規則の候補: 「{_truncate_log(c['surface'])}」→"
+                  f"{_truncate_log(c['correct'])}（{c['days']}日: 修正{c['applied_days']} / "
+                  f"見送り{c['other_days']}）")
+    except Exception as e:  # noqa: BLE001
+        _warn_continue("読みの候補の集計に失敗", e)
+
     # 外部の自動化（X告知投稿の自動生成等）が「今日の放送内容」を確実に読み取れる
     # よう、site/latest.json を書く。YouTubeのURLはまだ分からないのでNoneのまま
     # 先に書き、アップロードが成功したら下で上書きする（失敗しても放送は成立する）
@@ -241,6 +353,12 @@ def main() -> None:
             )
         else:
             print("[skip] YouTubeアップロードはスキップ、または失敗しました（放送生成は継続）")
+
+    try:
+        if summary_info.get("date"):
+            _write_step_summary(summary_info)
+    except Exception as e:  # noqa: BLE001
+        _warn_continue("実行サマリーの出力に失敗", e)
 
     print("=== 放送完了！いってらっしゃい ===")
 

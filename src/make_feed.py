@@ -26,6 +26,8 @@ from typing import Any
 
 from mutagen.mp3 import MP3
 
+from .reading_check import normalize_kana
+
 JST = timezone(timedelta(hours=9))
 
 
@@ -411,6 +413,137 @@ def record_character_additions(site: Path, date_key: str, facts: list[dict[str, 
     kept.sort(key=lambda e: e["date"])
 
     _write_json_atomic(path, kept)
+
+
+_READING_FIXES_KEEP_DAYS = 120   # 読みの修正履歴を残す日数
+_READING_FIX_FIELD_MAX = 24      # 履歴に残す surface/heard/correct の最大文字数（セリフ全文は入れない）
+
+
+def _is_notation_only_miss(item: dict[str, Any]) -> bool:
+    """AIの指摘のうち、範囲不審で除外され、かつ heard と correct が表記違いだけ
+    （normalize_kana で同じ）の空振りか。履歴には入れない。"""
+    return (item.get("kind") == "llm" and item.get("outcome") == "rejected_scope"
+            and normalize_kana(str(item.get("heard", ""))) == normalize_kana(str(item.get("correct", ""))))
+
+
+def reading_fix_items(report: dict[str, Any] | None) -> list[dict[str, str]]:
+    """読み検証の件数レポート（build_audio の reading_report）から、履歴に残す指摘の一覧を作る。
+
+    AIの指摘（details。kind="llm"）と、規則で直した分（rule_details のうち
+    outcome=="rule_applied"。kind="rule"）。表記違いだけの空振りは入れない。
+    """
+    items: list[dict[str, str]] = []
+    if not isinstance(report, dict):
+        return items
+    for d in report.get("details") or []:
+        item = {"surface": str(d.get("surface", "")), "heard": str(d.get("heard", "")),
+                "correct": str(d.get("correct", "")), "kind": "llm",
+                "outcome": str(d.get("outcome", ""))}
+        if not _is_notation_only_miss(item):
+            items.append(item)
+    for d in report.get("rule_details") or []:
+        if d.get("outcome") != "rule_applied":
+            continue
+        items.append({"surface": str(d.get("surface", "")), "heard": str(d.get("heard", "")),
+                      "correct": str(d.get("correct", "")), "kind": "rule",
+                      "outcome": "rule_applied"})
+    return items
+
+
+def record_reading_fixes(site: Path, date_key: str, items: list[dict[str, Any]]) -> None:
+    """その日の読みの指摘を site/reading_fixes_history.json に記録する。
+
+    形式: [{"date": "YYYYMMDD", "items": [{"surface","heard","correct","kind","outcome"}]}]。
+    kind は "rule"（規則で修正）か "llm"（AIの指摘）。同じ日付の既存エントリは置き換え、
+    日付の昇順に並べ、直近120日（date_key基準）より古い日付は落とす。surface/heard/correct は
+    各24文字までに切り詰める（セリフ全文は入れない）。表記違いだけの空振りは入れない。
+    """
+    path = site / "reading_fixes_history.json"
+    entries = _read_history_for_update(path)
+
+    clean_items = []
+    for it in items:
+        if not isinstance(it, dict) or _is_notation_only_miss(it):
+            continue
+        clean_items.append({
+            "surface": str(it.get("surface", ""))[:_READING_FIX_FIELD_MAX],
+            "heard": str(it.get("heard", ""))[:_READING_FIX_FIELD_MAX],
+            "correct": str(it.get("correct", ""))[:_READING_FIX_FIELD_MAX],
+            "kind": "rule" if it.get("kind") == "rule" else "llm",
+            "outcome": str(it.get("outcome", "")),
+        })
+
+    cutoff = datetime.strptime(date_key, "%Y%m%d") - timedelta(days=_READING_FIXES_KEEP_DAYS)
+    kept = []
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("date"), str) or e["date"] == date_key:
+            continue
+        try:
+            dt = datetime.strptime(e["date"], "%Y%m%d")
+        except ValueError:
+            continue
+        if dt >= cutoff:
+            kept.append(e)
+    kept.append({"date": date_key, "items": clean_items})
+    kept.sort(key=lambda e: e["date"])
+
+    _write_json_atomic(path, kept)
+
+
+def recurring_reading_candidates(site: Path, today_key: str, days: int = 30,
+                                 min_days: int = 3) -> list[dict[str, Any]]:
+    """直近days日にAIが繰り返し指摘した語（辞書・規則へ移す候補）を返す。
+
+    kind=="llm" の指摘を (surface, normalize_kana(correct)) でまとめ、min_days 日以上に
+    現れた組だけ返す。各組は {"surface","correct","days","applied_days","other_days"}
+    （applied_days＝その語を実際に直せた日数、other_days＝それ以外＝見送りの日数）。
+    日数の多い順。ファイルが無い/壊れている時は空リスト（例外を投げない）。
+    """
+    path = site / "reading_fixes_history.json"
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    try:
+        cutoff = datetime.strptime(today_key, "%Y%m%d") - timedelta(days=days)
+    except ValueError:
+        return []
+
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("date"), str):
+            continue
+        try:
+            dt = datetime.strptime(e["date"], "%Y%m%d")
+        except ValueError:
+            continue
+        if dt < cutoff or e["date"] > today_key:
+            continue
+        for it in e.get("items") or []:
+            if not isinstance(it, dict) or it.get("kind") != "llm":
+                continue
+            surface, correct = it.get("surface"), it.get("correct")
+            if not isinstance(surface, str) or not isinstance(correct, str):
+                continue
+            g = groups.setdefault((surface, normalize_kana(correct)),
+                                  {"surface": surface, "correct": correct,
+                                   "dates": set(), "applied": set()})
+            g["correct"] = correct
+            g["dates"].add(e["date"])
+            if it.get("outcome") == "applied":
+                g["applied"].add(e["date"])
+
+    result = []
+    for g in groups.values():
+        n = len(g["dates"])
+        if n >= min_days:
+            a = len(g["applied"])
+            result.append({"surface": g["surface"], "correct": g["correct"],
+                           "days": n, "applied_days": a, "other_days": n - a})
+    result.sort(key=lambda r: (-r["days"], r["surface"]))
+    return result
 
 
 def _filter_publishable(metas: list[dict[str, Any]], publish_from: str) -> list[dict[str, Any]]:
