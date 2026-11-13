@@ -1,0 +1,68 @@
+[
+ {
+  "date": "20261113",
+  "items": [
+   {
+    "surface": "開いてた",
+    "heard": "ヒライテタ",
+    "correct": "アイテタ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "米",
+    "heard": "ベイ",
+    "correct": "コメ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "後で",
+    "heard": "ゴデ",
+    "correct": "アトデ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261114",
+  "items": [
+   {
+    "surface": "行った",
+    "heard": "イッタ",
+    "correct": "オコナッタ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "三つ目",
+    "heard": "ミツメ",
+    "correct": "ミッツメ",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "三つ目",
+    "heard": "ミツメ",
+    "correct": "ミッツメ",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "原則",
+    "heard": "ケンソク",
+    "correct": "ゲンソク",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ }
+]
