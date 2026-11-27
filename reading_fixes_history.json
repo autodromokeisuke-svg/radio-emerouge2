@@ -1,0 +1,544 @@
+[
+ {
+  "date": "20261113",
+  "items": [
+   {
+    "surface": "開いてた",
+    "heard": "ヒライテタ",
+    "correct": "アイテタ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "米",
+    "heard": "ベイ",
+    "correct": "コメ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "後で",
+    "heard": "ゴデ",
+    "correct": "アトデ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261114",
+  "items": [
+   {
+    "surface": "行った",
+    "heard": "イッタ",
+    "correct": "オコナッタ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "三つ目",
+    "heard": "ミツメ",
+    "correct": "ミッツメ",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "三つ目",
+    "heard": "ミツメ",
+    "correct": "ミッツメ",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "原則",
+    "heard": "ケンソク",
+    "correct": "ゲンソク",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261115",
+  "items": [
+   {
+    "surface": "触れない",
+    "heard": "フレナイ",
+    "correct": "サワレナイ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワカ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261116",
+  "items": [
+   {
+    "surface": "弾かれやすい",
+    "heard": "ヒカレヤスイ",
+    "correct": "ハジカレヤスイ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "弾く",
+    "heard": "ヒク",
+    "correct": "ハジク",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261117",
+  "items": [
+   {
+    "surface": "分",
+    "heard": "プン",
+    "correct": "ブン",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "多そう",
+    "heard": "タソウ",
+    "correct": "オオソウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "万人",
+    "heard": "バンニン",
+    "correct": "マンニン",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "模索中",
+    "heard": "モサクアタ",
+    "correct": "モサクチュウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "生",
+    "heard": "ナマ",
+    "correct": "セイ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "認",
+    "heard": "ミトメ",
+    "correct": "ニン",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "証",
+    "heard": "アカシ",
+    "correct": "ショウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "目",
+    "heard": "モク",
+    "correct": "メ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "人",
+    "heard": "ニン",
+    "correct": "ヒト",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261118",
+  "items": [
+   {
+    "surface": "十分",
+    "heard": "ジュップン",
+    "correct": "ジュウブン",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "听いてる",
+    "heard": "キンイテル",
+    "correct": "キイテル",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "焦る",
+    "heard": "コゲル",
+    "correct": "アセル",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261119",
+  "items": [
+   {
+    "surface": "係",
+    "heard": "ガカリ",
+    "correct": "カカリ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "資本主義",
+    "heard": "シホンヌシギ",
+    "correct": "シホンシュギ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "一言",
+    "heard": "イチゲン",
+    "correct": "ヒトコト",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261120",
+  "items": [
+   {
+    "surface": "向いてる",
+    "heard": "ムカイテル",
+    "correct": "ムイテル",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "数年後",
+    "heard": "カズネンゴ",
+    "correct": "スウネンゴ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "上限",
+    "heard": "ジョオカギ",
+    "correct": "ジョウゲン",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261121",
+  "items": [
+   {
+    "surface": "止まれる",
+    "heard": "ヤマレル",
+    "correct": "トマレル",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "向いて",
+    "heard": "ムカイテ",
+    "correct": "ムイテ",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261122",
+  "items": [
+   {
+    "surface": "候補",
+    "heard": "コウホウ",
+    "correct": "コウホ",
+    "kind": "llm",
+    "outcome": "unverified"
+   },
+   {
+    "surface": "他",
+    "heard": "タ",
+    "correct": "ホカ",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   },
+   {
+    "surface": "他",
+    "heard": "タ",
+    "correct": "ホカ",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261123",
+  "items": [
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261124",
+  "items": [
+   {
+    "surface": "前回",
+    "heard": "マエカイ",
+    "correct": "ゼンカイ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "方",
+    "heard": "カタ",
+    "correct": "ホウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261125",
+  "items": [
+   {
+    "surface": "一歩",
+    "heard": "ハジメ",
+    "correct": "イッポ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "市乳製造",
+    "heard": "シチチセイゾウ",
+    "correct": "シニュウセイゾウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "稼働直数",
+    "heard": "カドウジカスウ",
+    "correct": "カドウチョクスウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "稼働直数",
+    "heard": "カドウジキスウ",
+    "correct": "カドウチョクスウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "直",
+    "heard": "ジキ",
+    "correct": "チョク",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "立ててる",
+    "heard": "タテテテル",
+    "correct": "タテテル",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "市乳",
+    "heard": "シチチ",
+    "correct": "シニュウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "他",
+    "heard": "タ",
+    "correct": "ホカ",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261126",
+  "items": [
+   {
+    "surface": "分",
+    "heard": "プン",
+    "correct": "ブン",
+    "kind": "llm",
+    "outcome": "unverified"
+   },
+   {
+    "surface": "人",
+    "heard": "ニン",
+    "correct": "ヒト",
+    "kind": "llm",
+    "outcome": "unverified"
+   },
+   {
+    "surface": "何人",
+    "heard": "ナンヒト",
+    "correct": "ナンニン",
+    "kind": "llm",
+    "outcome": "unverified"
+   },
+   {
+    "surface": "側",
+    "heard": "ソク",
+    "correct": "ガワ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "草稿",
+    "heard": "クサコウ",
+    "correct": "ソウコウ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   },
+   {
+    "surface": "分",
+    "heard": "ワケ",
+    "correct": "ブン",
+    "kind": "rule",
+    "outcome": "rule_applied"
+   }
+  ]
+ },
+ {
+  "date": "20261127",
+  "items": [
+   {
+    "surface": "組み立ててる",
+    "heard": "クミタテテテル",
+    "correct": "クミタテテル",
+    "kind": "llm",
+    "outcome": "rejected_scope"
+   },
+   {
+    "surface": "品しつ",
+    "heard": "シナシツ",
+    "correct": "ヒンシツ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "表",
+    "heard": "ヒョウ",
+    "correct": "オモテ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "再組合わせ",
+    "heard": "サイクミアイワセ",
+    "correct": "サイクミアワセ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "表",
+    "heard": "ヒョウ",
+    "correct": "オモテ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "表",
+    "heard": "ヒョウ",
+    "correct": "オモテ",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ },
+ {
+  "date": "20261128",
+  "items": [
+   {
+    "surface": "声",
+    "heard": "ゴエ",
+    "correct": "コエ",
+    "kind": "llm",
+    "outcome": "applied"
+   },
+   {
+    "surface": "地球上",
+    "heard": "チキュウウエ",
+    "correct": "チキュウジョウ",
+    "kind": "llm",
+    "outcome": "applied"
+   }
+  ]
+ }
+]

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>デイリーAIニュース RADIOえめるーじぇ</title>
+    <link>https://autodromokeisuke-svg.github.io/radio-emerouge2/</link>
+    <language>ja</language>
+    <description>エメとルジェが毎朝お届けする、通勤のお供AIニュースラジオ。その日のAI・テクノロジーの話題を、ふたりの掛け合いで20分ほどにまとめています。
+
+音声: Tαkoe:Style-Bert-VITS2:木角空 / Tαkoe:Style-Bert-VITS2:水巻咲（音源制作: Yumehaki Project V / VSMB Project） / BGM: Google Geminiで生成</description>
+    <lastBuildDate>Sat, 28 Nov 2026 08:48:25 +0900</lastBuildDate>
+    <pubDate>Sat, 28 Nov 2026 08:48:25 +0900</pubDate>
+    <itunes:author>えめるーじぇ</itunes:author>
+    <itunes:category text="Technology"/>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:type>episodic</itunes:type>
+    <itunes:owner>
+      <itunes:name>えめるーじぇ</itunes:name>
+      <itunes:email>emerouge.kei@gmail.com</itunes:email>
+    </itunes:owner>
+    <itunes:summary>エメとルジェが毎朝お届けする、通勤のお供AIニュースラジオ。その日のAI・テクノロジーの話題を、ふたりの掛け合いで20分ほどにまとめています。
+
+音声: Tαkoe:Style-Bert-VITS2:木角空 / Tαkoe:Style-Bert-VITS2:水巻咲（音源制作: Yumehaki Project V / VSMB Project） / BGM: Google Geminiで生成</itunes:summary>
+    <itunes:image href="https://autodromokeisuke-svg.github.io/radio-emerouge2/cover.jpg"/>
+    <item>
+      <title>デイリーAIニュース 11月28日号（11/28）</title>
+      <description>今日の話題: 生成AIへの不安 「犯罪に悪用される」が73% NHK世論調査 - NHKニュース / AIとの秘密の会話が競売に 未成年210万、全米の司法長官ら反対 - 朝日新聞 / ローソン担当者が「え～！」と困惑 AIが考えた“斬新なスイーツ案“、売れる商品にどう仕上げた？（1/3 ページ） - ITmedia / 政府が目視や検査のAI代替へ規制見直し「5原則」を提示：1週間を凝縮！ 今週の製造業ニュース - MONOist / 宇宙AIデータセンター、衛星100万基を米当局が承認 SpaceXが2027年にも打ち上げへ - 株式会社エクサウィザーズ / 1億人の「サイボーグ市民」で民主主義を AIが変える対話のかたち [AIの時代] - 朝日新聞</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261128.mp3" length="15342641" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261128.mp3</guid>
+      <pubDate>Sat, 28 Nov 2026 08:48:25 +0900</pubDate>
+      <itunes:duration>1221</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月27日号（11/27）</title>
+      <description>今日の話題: AIで証明の数学リーマン予想、英オックスフォード大学のメイナード教授「まだ人間は理解できず」 - 日本経済新聞 / 「AIに仕事を丸投げ」「日中はエステやプールに…」2.5時間労働で年収2000万円、タイで悠々自適な生活…25歳女性経営者の“生成AIとの付き合い方”（文春オンライン） - Yahoo!ニュース / 求人企業の90％がAIで作られたような履歴書を却下--半数がAI面接を実施 - ZDNET Japan / ガートナーが2027年のAIトレンドを予測 AGIは望ましくない？超合成データが鍵に？ - EnterpriseZine / 東京電力、AIインフラに10兆円 データセンター向け送電網・原発増強 - 日本経済新聞 ほか</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261127.mp3" length="14078410" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261127.mp3</guid>
+      <pubDate>Fri, 27 Nov 2026 08:59:52 +0900</pubDate>
+      <itunes:duration>1115</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月26日号（11/26）</title>
+      <description>今日の話題: クボタ、AIで熟練農家のノウハウ再現 NVIDIAとモデル開発へ - 日本経済新聞 / AIコーディングで人月モデル崩壊――AI駆動開発「Devin」に見る、本当の“AIの生産性”計測法：自社コミットの9割はAI生成 - ITmedia / “AI就活”に中小企業の40.2％が「把握せず」 6割超が選考対策も未実施 - キーマンズネット / 情シスが語るAI活用の誤算 削減したいのは工数なのに、確認作業は増える一方？ - キーマンズネット / 国会答弁をAIが作る時代に！ 官僚の深夜残業はなくなるのか、2027年から本格導入へ進む政府の狙いと課題 - JBpress / ディズニーもAI活用に動き出した…アドビとの提携から見えてくる「AIに何を任せ、何を人間が担うのか」という課題 - Yahoo!ファイナンス</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261126.mp3" length="14866005" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261126.mp3</guid>
+      <pubDate>Thu, 26 Nov 2026 09:01:33 +0900</pubDate>
+      <itunes:duration>1181</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月25日号（11/25）</title>
+      <description>今日の話題: AIエージェントは隙あらばサンドボックスの外に出るのか Anthropicが評価手法「Siren」を発表 / CrowdStrike、Zscalerを約439億ドルで買収へ 狙いはAIエージェントの安全確保 / 2028年までに「サービス中断」に見舞われるIT部門の共通点は？ Gartner予測 / DeNA、「AI社員」を外販 使い過ぎを“残業時間”で管理 / 経理が「2人→1人」に減る現場 弥生の開発陣が警鐘を鳴らす「なんとなく経営」の限界 / 明治が市乳製造にAI計画立案を導入、稼働直数を最大約17％削減へ</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261125.mp3" length="13115410" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261125.mp3</guid>
+      <pubDate>Wed, 25 Nov 2026 09:07:09 +0900</pubDate>
+      <itunes:duration>1035</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月24日号（11/24）</title>
+      <description>今日の話題: ジェンスン・フアン氏、NVIDIAのCEOに復帰 マスク氏「誤りは正された」 AI企業代表のコメントまとめ / Amazon、米デカートAIを1.1兆円で実質買収 AI処理コスト低減 - 日本経済新聞 / Museに後れを取るアップルとグーグル AIエージェント戦争のジレンマ【西田宗千佳のイマトミライ】 - Impress Watch / 私用AIの業務利用拡大、管理職の半数近く 情報流出リスク高まる - 日本経済新聞 / 国連事務総長「1年以内にリスク管理枠組みを」 AIの安全性めぐる国際会議 - TBS NEWS DIG / AIが生んだ「時間とお金」は誰のものか 生産性向上の果実をどう分けあうか - MRI 三菱総合研究所</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261124.mp3" length="13447393" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261124.mp3</guid>
+      <pubDate>Tue, 24 Nov 2026 11:42:46 +0900</pubDate>
+      <itunes:duration>1063</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月23日号（11/23）</title>
+      <description>今日の話題: Anthropicの数学者、「Claude」と共同で「リーマン予想」を証明したと主張 Leanコミュニティが「正しい」と認定 / 「オープンAIの文化壊れてた」 暴走止められず、辞めた社員の告白 [AIの時代] - 朝日新聞 / MetaのAIエージェント「Muse」は何ができる？ ChatGPTやGeminiとの違い、注意点を解説（1/2 ページ） - ITmedia Mobile - ITmedia / Windows PCをUSB4で直結、複数台で大規模AIを動かす新技術をMicrosoftが発表 - エルミタージュ秋葉原 / 米Etsy、AI学習条項で後退 ホリデー商戦前に出品者が店舗閉鎖 - BigGo ファイナンス / 「バグマゲドン」はいつ終わるのか AIが壊す安全、AIが取り戻す安全 - 株式会社エクサウィザーズ</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261123.mp3" length="13412877" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261123.mp3</guid>
+      <pubDate>Mon, 23 Nov 2026 06:19:57 +0900</pubDate>
+      <itunes:duration>1060</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月22日号（11/22）</title>
+      <description>今日の話題: 「AIが私を追い越した」 リーマン予想「証明」の数学者自身も驚き [AIの時代] - 朝日新聞 / OpenAI、常時稼働AIエージェント「dots」をPlusに試験提供 法人向けも拡大 - ビジネス+IT / OpenAI、AIの思考過程を盗む攻撃の成功率を0.2%へ低減 GPT-6.2で多層防御を導入 - ビジネス+IT / メルカリ AIに入力した個人情報漏えいか「リスト型攻撃」も - NHKニュース / AIにファクトチェックをどこまで任せられるか - WIRED.jp / 企業はAIをどう選ぶようになった？ ChatGPT、Copilot、Geminiの勢力図</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261122.mp3" length="12956322" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261122.mp3</guid>
+      <pubDate>Sun, 22 Nov 2026 06:05:51 +0900</pubDate>
+      <itunes:duration>1022</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月21日号（11/21）</title>
+      <description>今日の話題: 生成AIの競争軸、回答の質から代行力へ 米大手がエージェント競う - 日本経済新聞 / AIツール活用でデータ流出以上に警戒すべきリスク 「AI版シャーロッキング」の実態 | テクノロジー - DIAMOND ハーバード・ビジネス・レビュー / ウォール・ストリート・ジャーナル：AI業界の次なる壁は「保険」 - 毎日新聞 / 京大がAI依存チェックリスト公開 「当てはまるものあれば、しばらくAI触らないで」 / 「Muse」専用メアド、無料で作成可能に AIが送受信を代理 / Microsoft、AIによるサイバー攻撃にAIエージェントで対抗する新サービス「Microsoft Perception」提供開始</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261121.mp3" length="15179788" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261121.mp3</guid>
+      <pubDate>Sat, 21 Nov 2026 07:28:53 +0900</pubDate>
+      <itunes:duration>1207</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月20日号（11/20）</title>
+      <description>今日の話題: アンソロピック上場、17%高で好発進 AIリスク「回避できる」 - 日本経済新聞 / サイバー攻撃対策 日本は各国に比べAI使った検知などに遅れ - NHKニュース / AIに買い物まかせたら損害が出た…責任は誰に？ 政府が本格検討へ [AIの時代] - 朝日新聞 / NTTのフィジカルAI技術、ロボットが動く前に失敗回避 棚積み成功率9割超 - 日経クロステック / ZOZO、AI活用で開発完了数1.8倍 月200ドル上限でツールを自由選択 - 日経クロステック / ソニー田中社長「空間AIプラットフォームで新たな感動体験を創出」 - 日経ビジネス電子版</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261120.mp3" length="14650123" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261120.mp3</guid>
+      <pubDate>Fri, 20 Nov 2026 07:54:01 +0900</pubDate>
+      <itunes:duration>1163</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月19日号（11/19）</title>
+      <description>今日の話題: AIに記事が参照された対価を、クリエイターのみなさんに還元します - note / AIが4ドルのコストでゼロデイ脆弱性を発見--平凡なハッカーでも攻撃が可能な時代に - ZDNET Japan / ソニーCSLの北野社長「AI特異点は遠くない」 95%の仕事がAI優位に - 日本経済新聞 / AIエージェント活用で必須--テラデータが進める「コンテキストエンジニアリング」の勘所 - ZDNET Japan / AIの精度が低くて使えない――JA共済連がたどり着いた「AIエージェントの育て方」 - キーマンズネット / 情シスの生成AI活用、55％が工数削減「20％未満」 効果が出る業務は？ - キーマンズネット</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261119.mp3" length="16363063" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261119.mp3</guid>
+      <pubDate>Thu, 19 Nov 2026 08:12:14 +0900</pubDate>
+      <itunes:duration>1305</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月18日号（11/18）</title>
+      <description>今日の話題: AIを嫌う米国民、歓迎する中国国民 米中AI競争の勝敗を分ける新たな要因 - 株式会社エクサウィザーズ / 「キャリア相談はAIで十分」若手の1on1離れ レバレジーズは指名制を導入 - 日経クロステック / 企業での生成AI、「導入」から「活用」へ 全面利用可は68%に - 日本経済新聞 / AIコーディング導入、生産性2倍の企業がある一方で3割が低下 マッキンゼーとコグニションが提携 - BigGo ファイナンス / オープンＡＩ、最新のＡＩモデル「ＧＰＴ－６．２アストラ」を発表＝米国株個別(株探ニュース) - Yahoo!ファイナンス / ソニーがAIで挑むプロダンス採点、動きの同期定量化 センサー装着せず - 日経クロステック</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261118.mp3" length="14855022" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261118.mp3</guid>
+      <pubDate>Wed, 18 Nov 2026 08:09:14 +0900</pubDate>
+      <itunes:duration>1180</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月17日号（11/17）</title>
+      <description>今日の話題: OpenAI、AIエージェントが代わりに支払う「ChatGPT Wallet」 カード番号は渡さず、購入ごとに生体認証 / クレディセゾンはなぜChatGPTでROI954％・年169時間削減を達成できたのか / Googleの“人気AI講座”、先着1万人に無料提供 リスキリング推進団体 / フリーランス市場、受注者の約8割がAIを利用 自発的に開示は1割弱、両者に意識差 IBMリサーチなど調査 / AIによる誤った判断、責任を負うのは誰？ 「9割」をAIに委ねる時代に向け、IDCが提言 / 自信がなければ「分かりません」──足立区が議会答弁AIにかけた“ガード” 「情報間違えれば区民に影響」の思い / メルカリ、アプリ開発「2日→数十分」へ 直面したAI時代の“意外な課題”とは？</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261117.mp3" length="14865063" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261117.mp3</guid>
+      <pubDate>Tue, 17 Nov 2026 09:01:05 +0900</pubDate>
+      <itunes:duration>1181</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月16日号（11/16）</title>
+      <description>今日の話題: AIボットのクレカ利用、対応に追われる銀行 - ダイヤモンド・オンライン / 生成AIに手足を付けたエージェント、Claude Code登場でブレーク - 日経クロステック / 大手堅調の裏で倒産最多のIT業界、AIが引き起こす多重下請け構造の崩壊 - 日経クロステック / 声優・梶裕貴がCEOとして挑む AI時代の「声」のIPビジネスとは - 日経クロストレンド / 地域活性化 AIがデータ分析し課題整理 内閣府がウェブサイト「RAIDA」強化 市町村ごとに指標を偏差値表示 - 沖縄タイムス社 / Cloudflare、AI専用でタブやテーマや拡張などない軽量ヘッドレスブラウザ「Kitesurf」、オープンソースで公開</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261116.mp3" length="15612808" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261116.mp3</guid>
+      <pubDate>Mon, 16 Nov 2026 05:33:58 +0900</pubDate>
+      <itunes:duration>1243</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 11月15日号（11/15）</title>
+      <description>今日の話題: Jensen Huang’s departure blasts big hole in AI startup funding, VCs and founders say / 【追記あり】M365障害、ChatGPT／Claudeのコネクタにも影響 「ほとんどのリクエストで動作しない」 / AI agent startup LangChain hits $3B valuation / Export-banned Nvidia chips are behind China’s most powerful AI models — uh-oh, Jensen! / The AI graveyard: a running list of projects and startups that didn’t make it ほか</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261115.mp3" length="12996487" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20261115.mp3</guid>
+      <pubDate>Sun, 15 Nov 2026 05:07:42 +0900</pubDate>
+      <itunes:duration>1025</itunes:duration>
+    </item>
+    <item>
+      <title>デイリーAIニュース 9月1日号（9/1）</title>
+      <description>今日の話題: 小学校から「AI学習」、情報教育を大幅拡充 次期学習指導要領案 - 日本経済新聞 / 花王や森永「AIに選ばれるサイト」に チャット経由の買い物増に対応 - 日本経済新聞 / 生成AIによる災害対策本部の意思決定支援に向けた実証を開始 - ntt-east.co.jp / AIブームは何年先まで続く？ エヌビディア決算の部材発注「44.6兆円」が示す賭け - Forbes JAPAN / 防衛省が描く「AI活用」、指揮統制部門の支援まで広げる方針 海外では多くの命が「誤判断」に奪われる中で - 東京新聞 / 「超知能」AIに潜む三つのリスク 理論物理研究者が示す選択 - 毎日新聞</description>
+      <enclosure url="https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20260901.mp3" length="15509888" type="audio/mpeg"/>
+      <guid isPermaLink="true">https://autodromokeisuke-svg.github.io/radio-emerouge2/episodes/radio-20260901.mp3</guid>
+      <pubDate>Tue, 01 Sep 2026 06:36:26 +0900</pubDate>
+      <itunes:duration>1234</itunes:duration>
+    </item>
+  </channel>
+</rss>
